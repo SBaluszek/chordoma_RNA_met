@@ -1,0 +1,472 @@
+---
+title: "Figure 4"
+output: html_notebook
+---
+
+```{r}
+ndir = function(ndir){
+  if(!dir.exists(ndir)){
+    dir.create(ndir)
+  }
+  setwd(ndir)
+}
+
+dropNA = function(el){el[!is.na(el)]}
+
+pckgs = c("BiocManager", "biomaRt", "ggplot2", "limma", "tidyverse", "readxl", "ggnewscale", "ggrepel", "RColorBrewer", "data.table", "dplyr", "tidyr", "colorspace", "MethylResolver", "devtools", "circlize", "viridis", "ggpubr")
+x = setdiff(pckgs, installed.packages())
+if(length(x)>0){install.packages(x, ask = F, update = T)}
+x = setdiff(pckgs, installed.packages())
+if(length(x)>0){BiocManager::install(x, ask = F, update = T)}
+gh = setNames(c("omnideconv/immunedeconv", "darneson/MethylResolver"), c("immunedeconv", "MethylResolver"))
+x = setdiff(names(gh), installed.packages())
+if(length(x)>0){
+  for(el in x){
+    devtools::install_github(gh[el])
+  }
+}
+
+sapply(c(pckgs, names(gh)), library, character.only = T)
+```
+
+
+
+
+
+```{r}
+ndir("fig1_res")
+spl = read.csv(file = "spl_clust.csv")
+#nset = readRDS(file = "nset.rds")
+clust = read_rds(file = "clustering_methyl.rds")
+```
+
+
+```{r}
+ndir("fig2_res")
+log_c = read_rds("log_c.rds")
+trl = read_rds("trl.rds")
+```
+```{r}
+'B = getBeta(nset)
+colnames(B) = spl$sample[match(colnames(B), spl$file)]
+B = B[, spl$source[match(colnames(B), spl$sample)] == "chordoma"]
+colnames(B)'
+```
+
+
+```{r}
+ndir("fig4_res")
+#x = intersect(rownames(MethylSig), rownames(B))
+#mr = MethylResolver(methylMix = B[x,], methylSig = MethylSig[x,], betaPrime = FALSE)
+mr = as.data.frame(fread("MethylResolver.txt"))
+mr$sample = mr$V1
+mr = as.data.frame(mr %>% left_join(spl, by = "sample"))
+rownames(mr) = mr$V1
+```
+
+```{r}
+x = apply(log_c[,!grepl("NP", colnames(log_c))], 1, var)
+x = log_c[names(x[order(x, decreasing = T)]),!grepl("NP", colnames(log_c))]
+x = x[!(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)] == "" | duplicated(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)]) | is.na(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)])),]
+rownames(x) = trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)]
+mcp = immunedeconv::deconvolute(x, "mcp_counter", tumor = TRUE)
+mcp = as.data.frame(mcp)
+rownames(mcp) = mcp$cell_type
+mcp = mcp[,-1]
+mcp = as.data.frame(scale(t(mcp))) %>% rownames_to_column("sample") %>% left_join(spl, by = "sample")
+mcp
+```
+
+
+```{r}
+cols = setNames(RColorBrewer::brewer.pal(5, "Set2"), c("chordoma_C", "nucleus_pulposus", "chordoma_I", "chordoma_2", "chordoma_1"))
+
+mr_sel = c("abs_Mon", "abs_Dendritic", "abs_Macro", "abs_Neu", "abs_Eos", "abs_Treg", "abs_Tnaive", "abs_Tmem", "abs_CD8", "abs_NK", "abs_Bcell", "Purity")
+
+mr_sel = setNames(paste0(c("Monocytes", "Dendritic cells", "Macrophages", "Neutrophils", "Eosinophils", "Regulatory T-cells", "Naive T-cells","Memory T-cells", "Cytotoxic T-cells", "NK cells", "B-cells", "Purity"), ifelse(p.adjust(sapply(mr_sel, function(el){wilcox.test(as.formula(sprintf("%s ~ type", el)), data = mr)$p.value}), method = "BH") < 0.05, "*", "")),
+         mr_sel)
+
+
+el = hclust(dist(t(mr[,names(mr_sel)])), method = "ward.D")
+mr_sel = mr_sel[unique(c("Purity", el$labels[el$order]))]
+
+mcp_sel = c("T cell", "T cell CD8+", "cytotoxicity score", "NK cell", "B cell", "Macrophage/Monocyte", "Myeloid dendritic cell", "Neutrophil", "Endothelial cell", "Cancer associated fibroblast")
+
+mcp_sel = setNames(paste0(mcp_sel, ifelse(p.adjust(sapply(mcp_sel, function(el){wilcox.test(as.formula(sprintf("`%s` ~ type", el)), data = mcp)$p.value}), method = "BH") < 0.05, "*", "")), mcp_sel)
+
+el = hclust(dist(t(mcp[,names(mcp_sel)])), method = "ward.D")
+mcp_sel = mcp_sel[unique(c("cytotoxicity score", el$labels[el$order]))]
+
+
+y_sel = rev(setNames(c("Age", "Sex", "Methylation cluster", mr_sel, mcp_sel), c("age", "sex", "type", names(mr_sel), names(mcp_sel))))
+glen = function(el){1:length(el)}
+y_sel = gsub("Cancer associated fibroblast", "Cancer associated\nfibroblast", y_sel)
+
+x_sel = setNames(clust$labels[clust$order], clust$labels[clust$order])
+```
+
+
+
+```{r}
+df = mr %>%
+  select(c(names(mr_sel), "sample")) %>% pivot_longer(names(mr_sel), values_to = "val", names_to = "cell") %>%
+  mutate(y = glen(y_sel)[match(cell, names(y_sel))], x = glen(x_sel)[match(sample, names(x_sel))], part = "MethylResolver")
+
+df = rbind(df,mcp %>%
+             select(c(names(mcp_sel), "sample")) %>% pivot_longer(names(mcp_sel), values_to = "val", names_to = "cell") %>%
+             mutate(y = glen(y_sel)[match(cell, names(y_sel))], x = glen(x_sel)[match(sample, names(x_sel))], part = "MCPcounter"))
+
+df = df %>% mutate(disc = "")
+
+df = rbind(df, spl %>%
+             select(sample, type, sex) %>% pivot_longer(cols = c("type", "sex"), values_to = "disc", names_to = "cell") %>% mutate(part = "Sample", y = glen(y_sel)[match(cell, names(y_sel))], x = glen(x_sel)[match(sample, names(x_sel))], val = NA) %>%
+             select(colnames(df)))
+
+df = rbind(df, spl %>%
+             select(sample, age) %>% pivot_longer(cols = c("age"), values_to = "val", names_to = "cell") %>% mutate(part = "Sample", y = glen(y_sel)[match(cell, names(y_sel))], x = glen(x_sel)[match(sample, names(x_sel))], disc = NA) %>%
+             select(colnames(df)))
+
+df = df %>% mutate(sample = factor(sample, levels = clust$labels[clust$order]),
+                   part = factor(part, levels = c("Sample", "MethylResolver", "MCPcounter"))) %>% filter(!grepl("NP", sample))
+
+
+
+df
+```
+
+
+
+
+
+```{r}
+p = ggplot() +
+    theme_void() + theme(legend.position = "right",
+                       plot.background = element_rect(fill = "white", color = "white"),
+                       plot.margin = margin(5,5,5,15),
+                       axis.text.y = element_text(hjust = 1),
+                       strip.text.y = element_text(angle = 270))+
+  geom_tile(data = df %>% filter(cell == "Purity"), aes(x = x, y = y, fill = val)) +
+  scale_fill_gradientn(limits = c(0,1), values = unname(c(0,quantile((df %>% filter(cell == "Purity"))$val),1)), colors = c("white", RColorBrewer::brewer.pal(5, "YlGnBu"), "black"), name = " Purity", guide = guide_colourbar(direction = "horizontal", title.position = "top", order = 4)) +
+  new_scale_fill() +
+  geom_tile(data = df %>% filter(part == "MethylResolver" & !cell == "Purity"), aes(x = x, y = y, fill = val)) +
+  scale_fill_gradientn(limits = c(0,1), values = unname(c(0,quantile((df %>% filter(part == "MethylResolver" & val > 0 & !cell == "Purity"))$val, seq(0,1,0.1)),1)), colors = c("white", RColorBrewer::brewer.pal(11, "BuPu"), "black"), name = "MethylResolver", guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 5)) +
+  new_scale_fill() +
+  geom_tile(data = df %>% filter(part == "MCPcounter"), aes(x = x, y = y, fill = val)) +
+  scale_fill_gradientn(values = unname(c(0,quantile(( df %>% filter(part == "MCPcounter" & val > 0))$val, seq(0,1,0.1)),1)), colors = c("white", RColorBrewer::brewer.pal(11, "YlOrRd"), "black"), name = "scaled\nMCPcounter", guide = guide_colourbar(direction = "horizontal", title.position = "top", order = 6)) +
+  new_scale_fill() +
+  geom_tile(data = df %>% filter(cell == "sex"), aes(x = x, y = y, fill = disc)) +
+  scale_fill_manual(values = c("male" = "lightskyblue", "female" = "lightpink"), name = "Sex", guide = guide_legend(order = 2)) +
+  new_scale_fill() +
+  geom_tile(data = df %>% filter(cell == "type"), aes(x = x, y = y, fill = disc)) +
+  scale_fill_manual(values = cols, name = "Methylation\ncluster", guide = guide_legend(order = 3)) +
+  new_scale_fill() +
+  geom_tile(data = df %>% filter(cell == "age"), aes(x = x, y = y, fill = val)) +
+  scale_fill_gradientn(name = "Age", limits = c(0,80), colors = c("white", rev(viridis::viridis(10)), "black"), values = unname(c(0, quantile(spl$age[spl$source == "chordoma"], na.rm = T), 80))/80, guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 1)) +
+  scale_y_continuous(breaks = glen(y_sel), labels = y_sel, expand = c(0,0)) + scale_x_continuous(expand = c(0,0)) +
+  facet_grid(part~., scales = "free_y", space = "free_y")
+
+p
+```
+
+```{r}
+mcp_sel = c("T cell", "T cell CD8+", "cytotoxicity score", "NK cell", "B cell", "Macrophage/Monocyte", "Myeloid dendritic cell", "Neutrophil", "Endothelial cell", "Cancer associated fibroblast")
+
+x = mcp %>% select(c("sample", mcp_sel)) %>% pivot_longer(cols = mcp_sel, names_to = "cell_type", values_to = "val") %>% left_join(spl %>% select(sample, type), by = "sample") %>% group_by(cell_type) %>%
+  summarise(diff = mean(val[type == "chordoma_I"]) - mean(val[type == "chordoma_C"]),
+            p = wilcox.test(val~type)$p.value) %>% arrange(p) %>% mutate(padj = p.adjust(p, method = "BH"))
+
+ndir("fig4_res")
+fwrite(as.data.frame(x), row.names = F, quote = F, file = "MCP_supp.tsv", sep = "\t")
+```
+```{r}
+mr_sel = c("abs_Mon", "abs_Dendritic", "abs_Macro", "abs_Neu", "abs_Eos", "abs_Treg", "abs_Tnaive", "abs_Tmem", "abs_CD8", "abs_NK", "abs_Bcell", "Purity")
+
+x = mr %>% select(c("sample", mr_sel)) %>% pivot_longer(cols = mr_sel, names_to = "cell_type", values_to = "val") %>% left_join(spl %>% select(sample, type), by = "sample") %>% group_by(cell_type) %>%
+  summarise(diff = mean(val[type == "chordoma_I"]) - mean(val[type == "chordoma_C"]),
+            p = wilcox.test(val~type)$p.value) %>% arrange(p) %>% mutate(padj = p.adjust(p, method = "BH"))
+
+ndir("fig4_res")
+fwrite(as.data.frame(x), row.names = F, quote = F, file = "MR_supp.tsv", sep = "\t")
+```
+```{r}
+mr %>% select(c("type", "Purity")) %>% summarise(mdI = median(Purity[type == "chordoma_I"]), mdC = median(Purity[type == "chordoma_C"])) 
+```
+
+
+
+```{r}
+ndir("fig4_res")
+ggsave(p, filename = "fig4a.png", width = 210, height = 0.3*297, scale = 1.8, units = "mm",dpi = 400)
+ggsave(p, filename = "fig4a.pdf", width = 210, height = 0.3*297, scale = 1.8, units = "mm",dpi = 400)
+saveRDS(p, file = "fig4a.rds")
+```
+
+
+```{r}
+'ndir("fig4_res")
+prot = readxl::read_xlsx("20230315_CD8_CD4.xlsx")
+prot$mr = mr$abs_CD8[match(prot$sample, rownames(mr))]
+cor.test(prot$CD8pp, prot$mr, method = "kendall")'
+```
+
+
+```{r}
+mcp_ct = rev(c("T cell CD8+", "T cell", "NK cell", "B cell", "Macrophage/Monocyte", "Myeloid dendritic cell", "Neutrophil", "Endothelial cell", "Cancer associated fibroblast"))
+```
+
+```{r}
+mr_ct = c("abs_CD8", "abs_Tmem", "abs_Treg", "abs_NK", "abs_Bcell", "abs_Macro", "abs_Mon", "abs_Dendritic", "abs_Neu", "abs_Eos")
+```
+
+```{r}
+X = mr %>% select(mr_ct) %>% rownames_to_column("sample") %>% left_join(
+  mcp %>% select(c("sample", mcp_ct)) ,
+  by = "sample"
+) %>% pivot_longer(cols = c(mr_ct, mcp_ct))
+
+X
+```
+
+```{r}
+x = setNames(c("Monocytes", "Dendritic cells", "Macrophages", "Neutrophils", "Eosinophils", "Regulatory T-cells", "Naive T-cells","Memory T-cells", "Cytotoxic T-cells", "NK cells", "B-cells", "Purity"), c("abs_Mon", "abs_Dendritic", "abs_Macro", "abs_Neu", "abs_Eos", "abs_Treg", "abs_Tnaive", "abs_Tmem", "abs_CD8", "abs_NK", "abs_Bcell", "Purity"))
+```
+
+```{r}
+x[mr_ct]
+```
+
+
+
+
+```{r}
+df = expand.grid(mcp_ct, mr_ct) %>% rename(mcp = Var1, mr = Var2)
+df = do.call("rbind", lapply(X$sample, function(el){
+  df %>% mutate(sample = el)
+})) %>%
+  mutate(name = mr) %>% 
+  left_join(X, by = c("sample", "name")) %>% 
+  rename(x = value) %>%
+  mutate(name = mcp) %>% 
+  left_join(X, by = c("sample", "name")) %>% 
+  rename(y = value) %>% 
+  group_by(mcp, mr) %>% 
+  summarise(p = cor.test(x,y,method = "kendall")$p.value,
+            tau = cor(x,y, method = "kendall")) %>% 
+  mutate(mr = factor(x[as.character(mr)], levels = x[mr_ct]),
+         padj = p.adjust(p, method = "BH"))
+
+df
+```
+
+
+
+```{r}
+p = ggplot() + 
+  geom_tile(aes(x = mr, y = mcp, fill = tau), data = df) +
+  scale_fill_gradientn(limits = c(-1,1), colors = rev(RColorBrewer::brewer.pal(20, "Spectral"))) +
+  geom_text(aes(x = mr, y = mcp, label = format(round(tau, 2), nsmall = 2), color = ifelse(padj<0.01, "yes", "no")), data = df, fontface = "bold") +
+  scale_color_manual(name = "sig.", values = c("yes" = "black", "no" = "gray")) +
+  
+  theme_void() + theme(legend.position = "right",
+                       plot.background = element_rect(fill = "white", color = "white"),
+                       plot.margin = margin(4,4,4,4),
+                       axis.text.y = element_text(hjust = 1),
+                       axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+                       axis.title.y = element_text(angle = 90),
+                       axis.title.x = element_text())+
+  labs(x = "MethylResolver", y = "MCPcounter")
+
+p
+
+ndir("fig4_res")
+ggsave(p, filename = "fig4b.png", width = 0.6*210, height = 0.3*297, scale = 1.8, units = "mm",dpi = 400)
+ggsave(p, filename = "fig4b.pdf", width = 0.6*210, height = 0.3*297, scale = 1.8, units = "mm",dpi = 400)
+saveRDS(p, file = "fig4b.rds")
+```
+```{r}
+X = mr %>% select(mr_ct) %>% rownames_to_column("sample") %>% left_join(
+  mcp %>% select(c("sample", mcp_ct)) ,
+  by = "sample"
+) %>% mutate(type = spl$type[match(sample, spl$sample)])
+X$RNA_T = X$`T cell CD8+`
+```
+
+
+
+
+```{r}
+f = function(x){x[2]-x[1]}
+
+
+p = ggplot(data = X) +
+  geom_point(aes(x = abs_CD8, y = `T cell CD8+`, color = type)) +
+  geom_boxplot(aes(y = min(`T cell CD8+`)-0.1*(f(range(`T cell CD8+`))), x = abs_CD8, color = type), outlier.shape = NA, width = 0.1*f(range(X$`T cell CD8+`))) +
+  geom_boxplot(aes(x = min(abs_CD8)-0.1*(f(range(abs_CD8))), y = `T cell CD8+`, color = type), outlier.shape = NA, width = 0.1*f(range(X$abs_CD8))) +
+  scale_color_manual(values = cols) +
+  theme_bw() + theme(panel.grid = element_blank(), legend.position = "none") +
+  labs(title = "Cytotoxic T-cells estimate", x = "MethylResolver", y = "MCPcounter")
+```
+
+```{r}
+p
+```
+
+```{r}
+ndir("fig4_res")
+ggsave(p, filename = "fig4c.png", width = 0.4*210, height = 0.3*297, scale = 1.8, units = "mm",dpi = 400)
+ggsave(p, filename = "fig4c.pdf", width = 0.4*210, height = 0.3*297, scale = 1.8, units = "mm",dpi = 400)
+saveRDS(p, file = "fig4c.rds")
+```
+
+
+
+
+
+```{r}
+x = apply(log_c[,!grepl("NP", colnames(log_c))], 1, var)
+x = log_c[names(x[order(x, decreasing = T)]),!grepl("NP", colnames(log_c))]
+x = x[!(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)] == "" | duplicated(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)]) | is.na(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)])),]
+rownames(x) = trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)]
+est = immunedeconv::deconvolute_estimate(x)
+est = as.data.frame(t(est)) %>% mutate(sample = colnames(est)) 
+est = est %>% left_join(spl, by = "sample") %>% pivot_longer(cols = c("StromalScore", "ImmuneScore"), values_to = "value", names_to = "score") %>% dplyr::select(type, score, value) %>% filter(!type %in% "nucleus_pulposus")
+est
+```
+
+```{r}
+ndir("fig4_res")
+pap = readxl::read_xlsx("41467_2013_BFncomms3612_MOESM489_ESM.xlsx", sheet = "RNASeqV2")
+pap = pap %>% pivot_longer(cols = c("Stromal score", "Immune score"), values_to = "value", names_to = "score") %>% mutate(type = Platform) %>% dplyr::select(type, score, value)
+
+pap
+```
+```{r}
+el = setNames(c("KIRC", "LUAD", "BRCA", "LUSC", "HNSC", "GBM", "OV", "COADREAD", "BLCA", "UCEC"),
+         c("kidney renal clear cell carcinoma", "lung adenocarcinoma", "breast cancer", "lung squamous cell carcinoma", "head and neck squamous cell carcinoma", "glioblastoma multiforme", "ovarian serous cystadenocarcinoma", "colorectal adenocarcinoma", "bladder urothelial carcinoma", "uterine corpus endometrial carcinoma"))
+
+df = rbind(
+  est %>% mutate(study = "Current Study", score = gsub("Score", " score", score)),
+  est %>% mutate(study = "Current Study", type = tstrsplit(type, "_")[[1]], score = gsub("Score", " score", score)),
+  pap %>% mutate(study = "Comparison with TCGA", type = el[type])
+)
+
+df = df %>% mutate(type = factor(as.character(type),
+                                 levels = names(tapply(df$value, df$type, mean)[order(tapply(df$value, df$type, mean))])),
+                   study = factor(as.character(study), levels = c("Current Study", "Comparison with TCGA")))
+
+
+df$type = relevel(relevel(df$type, "chordoma_C"), "chordoma_I")
+```
+
+```{r}
+el = setNames(c("KIRC", "LUAD", "BRCA", "LUSC", "HNSC", "GBM", "OV", "COADREAD", "BLCA", "UCEC"),
+         c("kidney renal clear cell carcinoma", "lung adenocarcinoma", "breast cancer", "lung squamous cell carcinoma", "head and neck squamous cell carcinoma", "glioblastoma multiforme", "ovarian serous cystadenocarcinoma", "colorectal adenocarcinoma", "bladder urothelial carcinoma", "uterine corpus endometrial carcinoma"))
+
+x = setNames(
+  c(viridis::turbo(length(el)), "black", cols[c("chordoma_I", "chordoma_C")]),
+  c(intersect(levels(df$type), el), "chordoma", "chordoma_I", "chordoma_C"))
+
+x
+```
+
+```{r}
+set.seed(123)
+p = ggplot() +
+  geom_jitter(data = df, aes(x = type, y = value, fill = type), width = 0.15, height = 0, alpha = 0.5, color = "transparent", pch = 21) +
+  geom_boxplot(data = df, aes(x = type, y = value, color = type), fill = "transparent", outlier.shape = NA) +
+    geom_text(data = data.frame(x = mean(as.numeric(df$type[match(c("chordoma_I", "chordoma_C"), df$type)])),
+           y = 0.9*max(df$value),
+           score = c("Stromal score", "Immune score"),
+           study = factor("Current Study", levels = c("Current Study", "Comparison with TCGA")),
+           lab = sapply(c("Stromal score", "Immune score"), function(el){sprintf("p = %s", signif(wilcox.test(value~type, data = df %>% dplyr::filter(type %in% c("chordoma_I", "chordoma_C") & study %in% "Current Study" & score %in% el))$p.value, 2))})),
+             aes(x = x, y = y, label = lab)) +
+  theme_bw() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), axis.title = element_blank(), legend.position = "none") + facet_grid(score~study, scales = "free_x", space = "free") +
+  scale_color_manual(values = x) +
+  scale_fill_manual(values = x) + 
+  scale_x_discrete(labels = setNames(gsub("_", " ", as.character(unique(df$type))), unique(as.character(df$type))))
+
+p
+```
+
+
+```{r}
+ndir("fig4_res")
+ggsave(p, filename = "fig4d.png", width = 210, height = 0.3*297, scale = 1.6, units = "mm",dpi = 400)
+ggsave(p, filename = "fig4d.pdf", width = 210, height = 0.3*297, scale = 1.6, units = "mm",dpi = 400)
+saveRDS(p, file = "fig4d.rds")
+```
+
+
+```{r}
+df = mr %>% select(-colnames(spl)) %>% rename(spl = V1)
+df = df %>%
+  pivot_longer(cols = setdiff(colnames(df), "spl"), values_to = "value", names_to = "feature") %>% 
+  mutate(method = "MethylResolver")
+
+cbn = df
+
+df = mcp %>% mutate(V1 = sample) %>% select(-colnames(spl)) %>% rename(spl = V1)
+df = df %>%
+  pivot_longer(cols = setdiff(colnames(df), "spl"), values_to = "value", names_to = "feature") %>% 
+  mutate(method = "MCPcounter")
+
+cbn = rbind(cbn, df)
+
+
+```
+```{r}
+x = apply(log_c[,!grepl("NP", colnames(log_c))], 1, var)
+x = log_c[names(x[order(x, decreasing = T)]),!grepl("NP", colnames(log_c))]
+x = x[!(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)] == "" | duplicated(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)]) | is.na(trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)])),]
+rownames(x) = trl$hgnc_symbol[match(rownames(x), trl$ensembl_gene_id)]
+est = immunedeconv::deconvolute_estimate(x)
+est = as.data.frame(t(est)) %>% mutate(sample = colnames(est))
+```
+
+
+
+
+```{r}
+cbn = rbind(cbn,
+            est %>% rename(spl = sample) %>% pivot_longer(cols = setdiff(colnames(est), "sample"), values_to = "value", names_to = "feature") %>% 
+  mutate(method = "ESTIMATE"))
+cbn
+```
+
+
+```{r}
+fwrite(cbn %>% pivot_wider(names_from = spl, values_from = value), row.names = F, quote = F, file = "all_deconv.tsv", sep = "\t")
+```
+
+
+```{r}
+library(trqwe)
+ndir("fig4_res")
+fig4a = mcreadRDS("fig4a.rds")
+fig4b = mcreadRDS("fig4b.rds")
+fig4c = mcreadRDS("fig4c.rds")
+fig4d = mcreadRDS("fig4d.rds")
+```
+```{r}
+ggplot() + theme_void()
+```
+
+
+```{r}
+p = ggarrange(fig4a,
+              ggarrange(fig4b, fig4c, widths = c(6,4), labels = c("b", "c"), nrow = 1, ncol = 2),
+              ggplot() + theme_void(),
+              fig4d,
+              labels = c("a", "", "d", "e"), ncol = 1, nrow = 4, heights = c(3,2,1,2.5)) +
+  theme(panel.background = element_rect(fill = "white", color = "white"))
+ggsave(p, filename = "figure4.png", width = 210, height = 0.85*297, scale = 1.6, units = "mm",dpi = 400)
+ggsave(p, filename = "figure4.pdf", width = 210, height = 0.85*297, scale = 1.6, units = "mm",dpi = 400)
+```
+```{r}
+p
+```
+
+
+
+
+

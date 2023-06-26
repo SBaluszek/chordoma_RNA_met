@@ -1,0 +1,967 @@
+---
+title: "Figure 3"
+output: html_notebook
+---
+
+```{r}
+ndir = function(ndir){
+  if(!dir.exists(ndir)){
+    dir.create(ndir)
+  }
+  setwd(ndir)
+}
+
+dropNA = function(el){el[!is.na(el)]}
+
+pckgs = c("BiocManager", "ggplot2", "limma", "tidyverse", "readxl", "ggnewscale", "ggrepel", "RColorBrewer", "data.table", "dplyr", "tidyr", "colorspace", "WGCNA", "msigdbr", "fgsea", "data.table", "GSEAlm")
+x = setdiff(pckgs, installed.packages())
+install.packages(x)
+x = setdiff(pckgs, installed.packages())
+BiocManager::install(x, ask = F, update = T)
+gh = c()
+x = setdiff(names(gh), installed.packages())
+for(el in x){
+  devtools::install_github(gh[el])
+}
+sapply(c(pckgs, names(gh)), library, character.only = T)
+```
+
+```{r}
+ndir("fig1_res")
+spl = read.csv(file = "spl_clust.csv")
+clust = read_rds(file = "clustering_methyl.rds")
+```
+
+
+```{r}
+ndir("fig2_res")
+log_c = read_rds("log_c.rds")
+res = fread("res.csv")
+trl = read_rds("trl.rds")
+```
+
+```{r}
+res = res %>% mutate(
+  gr_Ch_NP = ifelse(padj_Ch_NP > 0.05, "ns", ifelse(log2FoldChange_Ch_NP > 0, "up", "dn")),
+  gr_CI_NP = ifelse(padj_CI_NP > 0.05, "ns", ifelse(log2FoldChange_CI_NP > 0, "up", "dn")),
+  gr_CC_NP = ifelse(padj_CC_NP > 0.05, "ns", ifelse(log2FoldChange_CC_NP > 0, "up", "dn")),
+  gr_CI_CC = ifelse(padj_CI_CC > 0.05, "ns", ifelse(log2FoldChange_CI_CC > 0, "up", "dn"))
+)
+
+sapply(c("gr_Ch_NP", "gr_CI_NP", "gr_CC_NP", "gr_CI_CC"), function(el){table(as.data.frame(res)[,el])})
+```
+
+
+```{r}
+gsets = list()
+x = msigdbr(species = "Homo sapiens", category = "C5")
+x = x[!x$gs_subcat=="HPO",]
+gsets[["GO"]] = split(x$ensembl_gene, x$gs_name)
+x = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "REACTOME")
+gsets[["REACTOME"]] = split(x$ensembl_gene, x$gs_name)
+'x = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "PID")
+gsets[["PID"]] = split(x$ensembl_gene, x$gs_name)
+x = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "BIOCARTA")
+gsets[["BC"]] = split(x$ensembl_gene, x$gs_name)
+x = msigdbr(species = "Homo sapiens", category = "H")
+gsets[["H"]] = split(x$ensembl_gene, x$gs_name)
+x = msigdbr(species = "Homo sapiens", category = "C8")
+gsets[["C8"]] = split(x$ensembl_gene, x$gs_name)
+x = msigdbr(species = "Homo sapiens", category = "C2", subcategory = "KEGG")
+gsets[["KEGG"]] = split(x$ensembl_gene, x$gs_name)'
+```
+
+
+
+```{r}
+cols = setNames(c("deepskyblue", RColorBrewer::brewer.pal(5, "Set2")), c("chordoma_gen", "chordoma_C", "nucleus_pulposus", "chordoma_I", "chordoma_2", "chordoma_1"))
+ttl = setNames(c("Gene Ontology", "KEGG", "Reactome", "PID", "Biocarta", "MsigDB Hallmark", "MsigDB C8"),
+               c("GO", "KEGG", "REACTOME", "PID", "BC", "H", "C8"))
+
+sin = list(GO = c("GOBP_", "GOCC_", "GOMF_"),
+           KEGG = c("KEGG_"),
+           REACTOME = c("REACTOME_"),
+           PID = c("PID_", "PATHWAY"),
+           BC = c("BIOCARTA_", "_PATHWAY"),
+           H = c("HALLMARK_"),
+           C8 = c("_CELLS"))
+
+nline = function(el, skip_in_name = "qwerty^&%$#", ct = 70){
+    for(em in skip_in_name){
+      el = gsub(em, "", el)
+    }
+    if(nchar(el) > ct){
+      el = unlist(strsplit(el, "_"))
+      if(max(cumsum(nchar(el))) > 3*ct){
+        el = el[cumsum(nchar(el)) < 3*ct]
+        el[length(el)] = paste0(el[length(el)], "...")
+      }
+      el = paste0(paste0(el, ifelse(c(0, diff(cumsum(nchar(el)) %% ct))<0, "\n", " ")), collapse = "")
+    } else {
+      el = gsub("_", " ", el)
+    }
+  return(el)
+}
+```
+
+```{r}
+nline = function(el, skip_in_name = "qwerty^&%$#", ct = 70){
+    for(em in skip_in_name){
+      el = gsub(em, "", el)
+    }
+  ans = ""
+  sc = 0
+  bc = 0
+  el = unlist(strsplit(el, "_"))
+  while (length(el) >  0) {
+    if(bc >= 3){
+      ans = paste0(ans, "...")
+      break
+    }
+    em = el[1]
+    el = el[-1]
+    if(ans == ""){
+      ans = em
+      sc = sc + nchar(em)
+    } else if(sc > ct){
+      ans = paste(ans, em, sep = "\n")
+      sc = 0
+      bc = bc + 1
+    } else {
+      ans = paste(ans, em, sep = " ")
+      sc = sc + nchar(em)
+    }
+  } 
+  return(ans)
+}
+```
+
+```{r}
+x = df %>% data.frame()
+sapply(x$name, nline, skip_in_name = sin[["GO"]], ct = 10)
+```
+
+
+
+
+
+
+
+```{r}
+Q = res %>% arrange(-abs(log2FoldChange_Ch_NP)) %>% filter(!(duplicated(ensembl_gene_id) | is.na(ensembl_gene_id) | is.na(log2FoldChange_Ch_NP)))
+Q = setNames(Q$log2FoldChange_Ch_NP, Q$ensembl_gene_id)
+set.seed(1995)
+gsea_Ch_NP = lapply(gsets, fgseaMultilevel, stats = Q, minSize = 5, maxSize = 1000)
+
+
+```
+
+```{r}
+ndir("fig3_res")
+ndir("fgsea")
+
+toplot = lapply(gsea_Ch_NP, function(el){
+  el = rbind(el %>% filter(NES > 0 & padj < 0.05) %>% mutate(rank = (log2(rank(pval)+1) + log2(rank(-NES) + 1))) %>% arrange(rank) %>% filter(rank <= (rank[order(rank)[10]])),
+             el %>% filter(NES < 0 & padj < 0.05) %>% mutate(rank = (log2(rank(pval)+1) + log2(rank(NES) + 1))) %>% arrange(-rank) %>% filter(rank <= (rank[order(rank)[10]])))
+  el = el 
+  return(el)
+})
+
+for(gs in rev(names(toplot))){
+  pl = list()
+  for(pw in toplot[[gs]]$pathway){
+    Q = Q[order(Q, decreasing = T)]
+    exp = (1:length(Q))/length(Q)
+    obs = cumsum(names(Q) %in% gsets[[gs]][[pw]])
+    obs = obs/max(obs)
+    df = data.frame(x = 1:length(Q), y = obs-exp, ptw = pw, gene = names(Q))
+    df = df %>% mutate(group = ifelse(res$padj_Ch_NP[match(gene, res$ensembl_gene_id)] > 0.05, "ns", ifelse(res$log2FoldChange_Ch_NP[match(gene, res$ensembl_gene_id)] > 0, "Ch", "NP")))
+    pl[[pw]] = ggplot() + 
+      geom_hline(yintercept = 0, color = "grey80") +
+      geom_area(data = df %>% filter(gene %in% gsets[[gs]][[pw]] | x %in% c(1, max(x))), aes(x = x, y = y), fill = "grey80") + 
+      geom_segment(data = df %>% filter(gene %in% gsets[[gs]][[pw]]), aes(x = x, xend = x, y = 0, yend = y, color = group)) + 
+      scale_x_continuous(limits = range(df$x), expand = c(0,0)) + scale_y_continuous(limits = c(-1,1), expand = c(0,0)) +
+      scale_color_manual(values = unname(c(cols["chordoma_gen"], cols["nucleus_pulposus"], "grey10")), breaks = c("Ch", "NP", "ns")) +
+      theme_minimal() + theme(legend.position = "none", axis.title = element_blank(), axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank())
+  }
+  
+  df = toplot[[gs]]
+  df$y = -(1:length(df$pathway))
+  up = ggplot() +
+    geom_text(data = df, aes(y = y, x = 0, label = sapply(df$pathway, nline, ct = 25, skip_in_name = sin[[gs]])), hjust = 0, size = 3) +
+    geom_label(data = df, aes(y = y, x = 5.5, fill = NES, label = signif(NES, digits = 3))) +
+    scale_fill_gradientn(name = "Normalized\nEnrichment\nScore", limits = c(-1, 1) * max(abs(df$NES), na.rm = T), colors = c(cols["nucleus_pulposus"], "gray80", cols["chordoma_gen"])) +
+    new_scale_fill() +
+    geom_label(data = df, aes(y = y, x = 4.5, fill = padj, label = signif(padj, digits = 3))) +
+    scale_fill_gradientn(name = "Adjusted\np-value", limits = c(1e-50, 1), colors = c("orange", "yellow", "green", "cyan", "aliceblue"), trans = "log10") +
+    geom_text(data = data.frame(txt = c(sprintf("%s term", ttl[gs]), "Enrichment plot", "Adj. p-val.", "NES"), x = c(1, 3, 4.5, 5.5)), aes(y = 0, x = x, label = txt), fontface = "bold") +theme_minimal() + theme(legend.position = "bottom", axis.title = element_blank(), axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank()) + scale_x_continuous(limits = c(0, 6), expand = c(0,0)) + scale_y_continuous(limits = c(min(df$y) -0.5, 0.5), expand = c(0,0))
+  
+  for(el in 1:length(df$pathway)){
+    up = up + annotation_custom(ggplotGrob(pl[[df$pathway[el]]]), xmin = 2, xmax = 4, ymin = df$y[el] - 0.5, ymax = df$y[el] + 0.5) 
+  }
+  
+  up = up + theme(plot.background = element_rect(fill = "white", color = "white"))
+  
+
+  ggsave(up, filename = sprintf("summgsea_%s_Ch_NP.jpg", gs), width = 6, height = 12, units = "in", dpi = 400)
+  saveRDS(up, file = sprintf("summgsea_%s_Ch_NP.rds", gs))
+  print(gs)
+}
+```
+
+
+
+
+
+```{r}
+Q = res %>% arrange(-abs(log2FoldChange_CI_CC)) %>% filter(!(duplicated(ensembl_gene_id) | is.na(ensembl_gene_id) | is.na(log2FoldChange_CI_CC)))
+Q = setNames(Q$log2FoldChange_CI_CC, Q$ensembl_gene_id)
+length(Q)
+set.seed(1995)
+gsea_CI_CC = lapply(gsets, fgseaMultilevel, stats = Q, minSize = 5, maxSize = 1000)
+
+ndir("fig3_res")
+ndir("fgsea")
+
+gsea_CI_CC = gsea_CI_CC[c("REACTOME", "GO")]
+
+toplot = lapply(gsea_CI_CC, function(el){
+  el = rbind(el %>% filter(NES > 0 & padj < 0.05) %>% mutate(rank = (log2(rank(pval)+1) + log2(rank(-NES) + 1))) %>% arrange(rank) %>% filter(rank <= (rank[order(rank)[10]])),
+             el %>% filter(NES < 0 & padj < 0.05) %>% mutate(rank = (log2(rank(pval)+1) + log2(rank(NES) + 1))) %>% arrange(-rank) %>% filter(rank <= (rank[order(rank)[10]])))
+  el = el 
+  return(el)
+})
+
+for(gs in names(toplot)){
+  pl = list()
+  for(pw in toplot[[gs]]$pathway){
+    Q = Q[order(Q, decreasing = T)]
+    exp = (1:length(Q))/length(Q)
+    obs = cumsum(names(Q) %in% gsets[[gs]][[pw]])
+    obs = obs/max(obs)
+    df = data.frame(x = 1:length(Q), y = obs-exp, ptw = pw, gene = names(Q))
+    df = df %>% mutate(group = ifelse(res$padj_CI_CC[match(gene, res$ensembl_gene_id)] > 0.05, "ns", ifelse(res$log2FoldChange_CI_CC[match(gene, res$ensembl_gene_id)] > 0, "CI", "CC")))
+    pl[[pw]] = ggplot() + 
+      geom_hline(yintercept = 0, color = "grey80") +
+      geom_area(data = df %>% filter(gene %in% gsets[[gs]][[pw]] | x %in% c(1, max(x))), aes(x = x, y = y), fill = "grey80") + 
+      geom_segment(data = df %>% filter(gene %in% gsets[[gs]][[pw]]), aes(x = x, xend = x, y = 0, yend = y, color = group)) + 
+      scale_x_continuous(limits = range(df$x), expand = c(0,0)) + scale_y_continuous(limits = c(-1,1), expand = c(0,0)) +
+      scale_color_manual(values = unname(c(cols["chordoma_I"], cols["chordoma_C"], "grey10")), breaks = c("CI", "CC", "ns")) +
+      theme_minimal() + theme(legend.position = "none", axis.title = element_blank(), axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank())
+  }
+  
+  df = toplot[[gs]]
+  df$y = -(1:length(df$pathway))
+  up = ggplot() +
+    geom_text(data = df, aes(y = y, x = 0, label = sapply(pathway, nline, ct = 25, skip_in_name = sin[[gs]])), hjust = 0, size = 3) +
+    geom_label(data = df, aes(y = y, x = 5.5, fill = NES, label = signif(NES, digits = 3))) +
+    scale_fill_gradientn(name = "Normalized\nEnrichment\nScore", limits = c(-1, 1) * max(abs(df$NES), na.rm = T), colors = c(cols["chordoma_C"], "gray80", cols["chordoma_I"])) +
+    new_scale_fill() +
+    geom_label(data = df, aes(y = y, x = 4.5, fill = padj, label = signif(padj, digits = 3))) +
+    scale_fill_gradientn(name = "Adjusted\np-value", limits = c(1e-50, 1), colors = c("orange", "yellow", "green", "cyan", "aliceblue"), trans = "log10") +
+    geom_text(data = data.frame(txt = c(sprintf("%s term", ttl[gs]), "Enrichment plot", "Adj. p-val.", "NES"), x = c(1, 3, 4.5, 5.5)), aes(y = 0, x = x, label = txt), fontface = "bold") +theme_minimal() + theme(legend.position = "bottom", axis.title = element_blank(), axis.text = element_blank(), axis.ticks = element_blank(), panel.grid = element_blank()) + scale_x_continuous(limits = c(0, 6), expand = c(0,0)) + scale_y_continuous(limits = c(min(df$y) -0.5, 0.5), expand = c(0,0))
+  
+  for(el in 1:length(df$pathway)){
+    up = up + annotation_custom(ggplotGrob(pl[[df$pathway[el]]]), xmin = 2, xmax = 4, ymin = df$y[el] - 0.5, ymax = df$y[el] + 0.5) 
+  }
+  
+  up = up + theme(plot.background = element_rect(fill = "white", color = "white"))
+  
+
+  ggsave(up, filename = sprintf("summgsea_%s_CI_CC.jpg", gs), width = 6, height = 12, units = "in", dpi = 400)
+  saveRDS(up, file = sprintf("summgsea_%s_CI_CC.rds", gs))
+  print(gs)
+}
+```
+
+
+```{r}
+ndir("fig3_res")
+ndir("fgsea")
+fig3a = readRDS("summgsea_GO_CI_CC.rds")
+fig3a
+```
+
+```{r}
+ndir("fig3_res")
+ggsave(fig3a, filename = "fig3a.png", width = 210/2, height = 297/2, units = "mm", dpi = 400, scale = 1.8)
+```
+
+```{r}
+ndir("fig3_res")
+ndir("fgsea")
+fig3b1 = readRDS("summgsea_GO_Ch_NP.rds")
+fig3b1
+```
+
+```{r}
+ndir("fig3_res")
+ggsave(fig3b1, filename = "fig3b1.png", width = 210/2, height = 297/2, units = "mm", dpi = 400, scale = 2)
+```
+
+
+```{r}
+library(ggraph)
+library(tidygraph)
+library(ggpubr)
+df = gsets$GO[(gsea_CI_CC$GO %>% filter(padj < 0.05 & NES > 0))$pathway]
+df = data.frame(term = rep(names(df), times = sapply(df, length)), gene = unlist(df))
+df = as_tbl_graph(df) %>% activate(nodes) %>% mutate(centrality = centrality_authority(), type = ifelse(name %in% names(gsets$GO), "term", "gene"))
+
+
+
+selg = df %>% data.frame() %>%
+  arrange(-centrality) %>%
+  filter(type == "gene") %>%
+  mutate(symbol = trl$hgnc_symbol[match(name, trl$ensembl_gene_id)], pval = res$pvalue_CI_CC[match(name, res$ensembl_gene_id)], padj = res$padj_CI_CC[match(name, res$ensembl_gene_id)]) %>%
+  arrange(padj) %>% mutate(sig = log2(1:length(name))) %>% 
+  arrange(-centrality) %>% mutate(cen = log2(1:length(name))) %>% 
+  mutate(score = sig+cen) %>% arrange(score) %>%
+  filter(!(is.na(symbol) | is.na(pval) | duplicated(symbol)))
+
+
+
+
+
+selt = df %>% data.frame() %>%
+  arrange(-centrality) %>%
+  filter(type == "term") %>%
+  mutate(pval = gsea_CI_CC$GO$pval[match(name, gsea_CI_CC$GO$pathway)], padj = gsea_CI_CC$GO$padj[match(name, gsea_CI_CC$GO$pathway)]) %>%
+  arrange(padj) %>% mutate(sig = log2(1:length(name))) %>% 
+  arrange(-centrality) %>% mutate(cen = log2(1:length(name))) %>% 
+  mutate(score = sig+cen) %>% arrange(score) 
+
+
+
+x = gsets$GO[(gsea_CI_CC$GO %>% filter(pathway %in% selt$name[1:8]))$pathway]
+x = data.frame(term = rep(names(x), times = sapply(x, length)), gene = unlist(x)) %>% mutate(score = selg$score[match(gene, selg$name)]) %>%
+  arrange(score) %>% filter(score <= selg$score[30])
+
+el = quantile(res$log2FoldChange_CI_CC, na.rm = T, c(0,0.1, 0.5, 0.9, 1))
+x = as_tbl_graph(x) %>%
+  activate(nodes) %>%
+  mutate(type = ifelse(grepl("ENSG", name), "gene", "term"), symbol = trl$hgnc_symbol[match(name, trl$ensembl_gene_id)]) %>%
+  mutate(lab = ifelse(type == "gene", symbol, gsub(" $", "", gsub("\n$", "", sapply(name, nline, skip_in_name = sin[["GO"]], ct = 25)))),
+         lfc = ifelse(type == "gene", res$log2FoldChange_CI_CC[match(name, res$ensembl_gene_id)],0),
+         padj = ifelse(type == "gene", res$padj_CI_CC[match(name, res$ensembl_gene_id)],0))
+
+
+f = function(el){(el - min(el))/(max(el) - min(el))}
+
+set.seed(123)
+dn = x %>% ggraph(layout = 'kk') + 
+  geom_edge_link(alpha = 0.5, color = "saddlebrown") + 
+  geom_node_point(aes(shape = ifelse(type == "gene", 16, 15), color = lfc), size = 10) +
+  scale_color_gradientn(limits = range(el), colors = unname(c(darken(cols["chordoma_C"], 0.2), cols["chordoma_C"], "gray", cols["chordoma_I"], darken(cols["chordoma_I"], 0.2))), values = f(unname(el)), name = expression("log"[2]*"FC")) +
+  scale_shape_identity(guide_legend(show = FALSE)) +
+  geom_node_text(aes(label = lab, fontface = ifelse(type == "gene", "plain", "bold")), colour = 'black', size = 2.5) + 
+  theme_void() + theme(legend.position = "right", plot.background = element_rect(fill = "white", color = "white"), plot.margin = margin(4,4,4,4))
+
+dn$data$y[dn$data$name == "GOBP_ADAPTIVE_IMMUNE_RESPONSE"] = dn$data$y[dn$data$name == "GOBP_ADAPTIVE_IMMUNE_RESPONSE"] + 0.25
+dn$data$y[dn$data$name == "GOBP_POSITIVE_REGULATION_OF_IMMUNE_SYSTEM_PROCESS"] = dn$data$y[dn$data$name == "GOBP_POSITIVE_REGULATION_OF_IMMUNE_SYSTEM_PROCESS"] - 0.5
+dn$data$y[dn$data$name == "GOBP_LYMPHOCYTE_ACTIVATION"] = dn$data$y[dn$data$name == "GOBP_LYMPHOCYTE_ACTIVATION"] - 1
+dn$data$y[dn$data$name == "GOBP_REGULATION_OF_IMMUNE_RESPONSE"] = dn$data$y[dn$data$name == "GOBP_REGULATION_OF_IMMUNE_RESPONSE"] - 0.2
+
+ndir("fig3_res")
+ggsave(dn, filename = "genes_hi.png", width = 210/2, height = 297/4, units = "mm", dpi = 400, scale = 2)
+
+df = gsets$GO[(gsea_CI_CC$GO %>% filter(padj < 0.05 & NES < 0) %>% arrange(NES))$pathway] 
+df = data.frame(term = rep(names(df), times = sapply(df, length)), gene = unlist(df)) %>% mutate(padj = res$padj_CI_CC[match(gene, res$ensembl_gene_id)], lfc = res$log2FoldChange_CI_CC[match(gene, res$ensembl_gene_id)], nes = gsea_CI_CC$GO$NES[match(term, gsea_CI_CC$GO$pathway)]) %>% filter(padj < 0.05 & lfc < 0)
+el = tapply(as.numeric(gsub("ENSG", "", df$gene)), df$term, function(el){paste0(el[order(el)],collapse = ";")})
+el = el[order(gsea_CI_CC$GO$NES[match(names(el), gsea_CI_CC$GO$pathway)])]
+el = el[!duplicated(el)]
+df = df %>% filter(term %in% names(el))
+
+el = quantile(res$log2FoldChange_CI_CC, na.rm = T, c(0,0.1, 0.5, 0.9, 1))
+
+df = as_tbl_graph(df) %>% activate(nodes) %>% mutate(centrality = centrality_authority(), type = ifelse(name %in% names(gsets$GO), "term", "gene")) %>%
+  mutate(symbol = trl$hgnc_symbol[match(name, trl$ensembl_gene_id)]) %>%
+  mutate(lab = ifelse(type == "gene", symbol, gsub(" $", "", gsub("\n$", "", sapply(name, nline, skip_in_name = sin[["GO"]], ct = 9)))),          lfc = ifelse(type == "gene", res$log2FoldChange_CI_CC[match(name, res$ensembl_gene_id)],el[3]), padj = ifelse(type == "gene", res$padj_CI_CC[match(name, res$ensembl_gene_id)],0))
+                                                       
+
+
+f = function(el){(el - min(el))/(max(el) - min(el))}
+
+set.seed(2023)
+up = df %>% ggraph(layout = "fr") + 
+  geom_edge_link(alpha = 0.5, color = "saddlebrown") + 
+  geom_node_point(aes(shape = ifelse(type == "gene", 16, 15), color = lfc), size = 10) +
+  scale_color_gradientn(limits = range(el), colors = unname(c(darken(cols["chordoma_C"], 0.2), cols["chordoma_C"], "gray", cols["chordoma_I"], darken(cols["chordoma_I"], 0.2))), values = f(unname(el))) +
+  scale_shape_identity(guide_legend(show = FALSE)) +
+  geom_node_text(aes(label = lab, fontface = ifelse(type == "gene", "plain", "bold")), colour = 'black', size = 2.5) + 
+  theme_void() + scale_x_continuous(expand = c(0.1,0.1)) + theme(legend.position = "right", plot.background = element_rect(fill = "white", color = "white"), plot.margin = margin(4,4,4,4))
+
+up$data$y[up$data$name == "ENSG00000197915"] = up$data$y[up$data$name == "ENSG00000197915"] + 0.1
+
+#ndir("fig3_res")
+ggsave(up, filename = "genes_lo.png", width = 210/2, height = 297/4, units = "mm", dpi = 400, scale = 2)
+```
+
+
+
+
+
+
+```{r}
+
+fig3b = ggarrange(dn, up, nrow = 2, ncol  = 1, common.legend = T, legend = "bottom")
+fig3b
+```
+
+```{r}
+ndir("fig3_res")
+ggsave(fig3b + theme(plot.background = element_rect(fill = "white", color = "white")), filename = "fig3b.png", width = 210/2, height = 297/2, units = "mm", dpi = 400, scale = 1.8)
+saveRDS(fig3b, file = "fig3b.rds")
+```
+
+
+
+```{r}
+datExpr = scale(t(log_c))
+```
+
+```{r}
+enableWGCNAThreads(nThreads = 48)
+powers = 1:25
+sft = pickSoftThreshold(datExpr, powerVector = powers, verbose = 5, dataIsExpr = TRUE, networkType = "signed")
+ndir("fig3_res")
+saveRDS(sft, "WGCNA_chord_sft.rds")
+sft = readRDS("WGCNA_TCGA_GBM_sft.rds")
+
+sft$powerEstimate
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+sft$powerEstimate
+```
+
+```{r}
+ndir("fig3_res")
+#chor_net = blockwiseModules(datExpr, power = sft$powerEstimate, networkType = "signed", minModuleSize = 30, reassignThreshold = 0, mergeCutHeight = 0.25, numericLabels = TRUE, pamRespectsDendro = FALSE, saveTOMs = TRUE, saveTOMFileBase = "chor_WGCNA_", verbose = 5)
+#saveRDS(chor_net, file = "WGCNA_chor.rds")
+chor_net = mcreadRDS("WGCNA_chor.rds")
+```
+
+```{r}
+table(chor_net$colors)
+```
+
+
+```{r}
+ck = standardColors(length(unique(chor_net$colors))+3)
+ck = ck[!ck %in% c("white", "lightyellow","ivory")]
+ck = setNames(ck, paste0("ME", unique(chor_net$colors)[order(unique(chor_net$colors))]))
+ck
+```
+
+
+
+
+```{r}
+eig_sam = cbind(chor_net$MEs, spl[match(rownames(chor_net$MEs), spl$sample),])
+
+eig_sam
+```
+
+```{r}
+library(ggdendro)
+library(ggnewscale)
+cl = hclust(dist(t(chor_net$MEs)), "ward.D")
+plot(cl)
+pdf = as.dendrogram(cl)
+pdf = dendro_data(pdf, type = "rectangle")
+segment(pdf)
+```
+
+```{r}
+altcl = hclust(dist(chor_net$MEs), "ward.D")
+plot(altcl)
+```
+
+```{r}
+pdf$segments
+```
+
+```{r}
+eig_sam$x = setNames(1:max(clust$order), clust$labels[clust$order])[gsub("NP7", "NP1", eig_sam$sample)]
+df = eig_sam %>%
+  pivot_longer(cols = colnames(eig_sam)[grepl("ME", colnames(eig_sam))], values_to = "val", names_to = "module") %>%
+  mutate(y = setNames(1:max(cl$order), cl$labels[cl$order])[module])
+
+f = function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+
+p = ggplot() +
+  geom_tile(data = df, aes(x = x, y = y, fill = val)) + 
+  scale_fill_gradientn(values = f(quantile(df$val, (0:10)/10)), colors = rev(RColorBrewer::brewer.pal(11, "Spectral")), name = "Val.") +
+  new_scale_fill()
+
+cx = min(df$x) - 1.5
+cmp = df %>% filter(type == "chordoma_C") %>% group_by(module) %>% summarise(mn1 = mean(val)) %>%
+  left_join(df %>% filter(type == "nucleus_pulposus") %>% group_by(module) %>% summarise(mn2 = mean(val)), by = "module") %>% mutate(diff = mn1-mn2) %>% left_join(df %>% filter(type %in% c("nucleus_pulposus", "chordoma_C")) %>% group_by(module) %>% summarise(p = wilcox.test(val ~ type)$p.value) %>% mutate(padj = p.adjust(p, method = "BH")), by = "module") %>% arrange(-abs(diff)) %>% mutate(lab = ifelse(padj < 0.05, "∗", "")) %>% mutate(y = setNames(1:max(cl$order), cl$labels[cl$order])[module], x = cx)
+p = p + geom_tile(data = cmp, aes(x = x, y = y, fill = diff)) +
+  geom_text(data = cmp, aes(x = x, y = y, label = lab)) +
+  scale_fill_gradientn(values = f(c(min(cmp$diff), 0, max(cmp$diff))), colors = c(darken(cols["nucleus_pulposus"], 0.2), "white", darken(cols["chordoma_C"], 0.2)), guide = guide_none()) + new_scale_fill()
+
+cx = cx - 1
+cmp = df %>% filter(type == "chordoma_I") %>% group_by(module) %>% summarise(mn1 = mean(val)) %>%
+  left_join(df %>% filter(type == "nucleus_pulposus") %>% group_by(module) %>% summarise(mn2 = mean(val)), by = "module") %>% mutate(diff = mn1-mn2) %>% left_join(df %>% filter(type %in% c("nucleus_pulposus", "chordoma_I")) %>% group_by(module) %>% summarise(p = wilcox.test(val ~ type)$p.value) %>% mutate(padj = p.adjust(p, method = "BH")), by = "module") %>% arrange(-abs(diff)) %>% mutate(lab = ifelse(padj < 0.05, "∗", "")) %>% mutate(y = setNames(1:max(cl$order), cl$labels[cl$order])[module], x = cx)
+p = p + geom_tile(data = cmp, aes(x = x, y = y, fill = diff)) +
+  geom_text(data = cmp, aes(x = x, y = y, label = lab)) +
+  scale_fill_gradientn(values = f(c(min(cmp$diff), 0, max(cmp$diff))), colors = c(darken(cols["nucleus_pulposus"], 0.2), "white", darken(cols["chordoma_I"], 0.2)), guide = guide_none()) + new_scale_fill()
+
+cx = cx - 1
+cmp = df %>% filter(type == "chordoma_I") %>% group_by(module) %>% summarise(mn1 = mean(val)) %>%
+  left_join(df %>% filter(type == "chordoma_C") %>% group_by(module) %>% summarise(mn2 = mean(val)), by = "module") %>% mutate(diff = mn1-mn2) %>% left_join(df %>% filter(type %in% c("chordoma_C", "chordoma_I")) %>% group_by(module) %>% summarise(p = wilcox.test(val ~ type)$p.value) %>% mutate(padj = p.adjust(p, method = "BH")), by = "module") %>% arrange(-abs(diff)) %>% mutate(lab = ifelse(padj < 0.05, "∗", "")) %>% mutate(y = setNames(1:max(cl$order), cl$labels[cl$order])[module], x = cx)
+p = p + geom_tile(data = cmp, aes(x = x, y = y, fill = diff)) +
+  geom_text(data = cmp, aes(x = x, y = y, label = lab)) +
+  scale_fill_gradientn(values = f(c(min(cmp$diff), 0, max(cmp$diff))), colors = c(darken(cols["chordoma_C"], 0.2), "white", darken(cols["chordoma_I"], 0.2)), guide = guide_none()) + new_scale_fill()
+
+  
+cx = cx - 1
+cmp = max(df$x) * 0.1 / max(pdf$segments$y)
+pdf$segments$cx = cx
+pdf$labels$cx = cx
+p = p + geom_segment(data = pdf$segments, aes(y = x, yend = xend, x = (-y*cmp)-1.2+cx, xend = (-yend*cmp)-1.2+cx)) +
+  geom_point(data = pdf$labels, aes(x = -1.2+cx, y = x, color = label), size = 3) +
+  scale_color_manual(values = ck, guide = guide_none()) +
+  geom_text(data = pdf$labels, aes(x = 0.4+cx, y = x, label = gsub("ME", "", label)), hjust = 1) 
+
+cx = max(df$y) + 1.5
+p = p + geom_tile(data = eig_sam %>% mutate(y = cx), aes(x = x, y = y, fill = type)) + scale_fill_manual(name = "Methylation\ncluster", values = unname(cols), breaks = names(cols), labels = gsub("_", " ", names(cols)), guide = guide_legend(order = 3, nrow = 3)) + new_scale_fill()
+cx = cx + 1
+p = p + geom_tile(data = eig_sam %>% mutate(y = cx), aes(x = x, y = y, fill = sex)) + scale_fill_manual(name = "Sex", values = c("male" = "skyblue", "female" = "pink"), guide = guide_legend(order = 2, nrow = 2)) + new_scale_fill()
+cx = cx + 1
+p = p + geom_tile(data = eig_sam %>% mutate(y = cx), aes(x = x, y = y, fill = age)) + scale_fill_gradientn(name = "Age", limits = c(0,80), colors = c("white", rev(viridis::viridis(10)), "black"), values = unname(c(0, quantile(spl$age[spl$source == "chordoma"], na.rm = T), 80))/80, guide = guide_colourbar(direction = "horizontal", order = 1)) + new_scale_fill()
+
+p = p + scale_x_continuous(expand = c(0,0)) + scale_y_continuous(expand = c(0,0))+theme_void() + theme(plot.background = element_rect(fill = "white", color = "white"), plot.margin = margin(4,4,4,4), legend.position = "bottom")
+p
+```
+```{r}
+x = matrix(c("source", "chordoma", "nucleus_pulposus", "Ch_NP",
+         "type", "chordoma_I", "chordoma_C", "CI_CC",
+         "type", "chordoma_I", "nucleus_pulposus", "CI_NP",
+         "type", "chordoma_C", "nucleus_pulposus", "CC_NP"),
+         ncol = 4, byrow = T,
+       dimnames = list(r = c("Ch_NP", "CI_CC", "CI_NP", "CC_NP"), c = c("src", "gr1", "gr2", "cmp")))
+
+x = do.call(rbind, apply(x,1,function(el){
+  gr1 = el[2]
+  gr2 = el[3]
+  df = eig_sam %>%
+    rename("src" = unname(el[1])) %>%
+    filter(src %in% c(gr1, gr2)) %>%
+    pivot_longer(cols = colnames(eig_sam)[grepl("ME", colnames(eig_sam))], values_to = "val", names_to = "module") %>%
+    dplyr::group_by(module) %>% 
+    summarise(dif = mean(val[src == gr1]) - mean(val[src == gr2]),
+              p = wilcox.test(val ~ src)$p.value) %>% 
+    mutate(padj = p.adjust(p, method = "BH"),comp = el[4]) 
+  return(df)
+})) %>% arrange(p)
+
+x
+```
+```{r}
+ndir("fig3_res")
+fwrite(x, row.names = F, quote = F, file = "WGCNA_supp.tsv", sep = "\t")
+```
+
+```{r}
+x = x %>% mutate(gr = ifelse(padj > 0.05, "ns", ifelse(dif > 0, "up", "down")))
+xtabs(~comp + gr, x)
+```
+
+
+```{r}
+ndir("fig3_res")
+ggsave(p + theme(plot.background = element_rect(fill = "white", color = "white")), filename = "fig3c.png", width = 210/2, height = 297/2, units = "mm", dpi = 400, scale = 1.8)
+saveRDS(p, file = "fig3c.rds")
+```
+
+```{r}
+p = chor_net$blockGenes
+p = lapply(p, function(el){ck[chor_net$colors[el]]})
+
+p
+```
+
+
+```{r}
+p = sample(1:1000, 10)
+
+```
+
+
+
+
+
+```{r}
+library(png)
+ndir("fig3_res")
+pl = list()
+
+x = labels2colors(chor_net$colors, colorSeq = unname(ck))
+
+pl = lapply(1:length(chor_net$dendrograms), function(el){
+  png(filename = sprintf("WGCNA_dend_%s.png", el), width = 1.5*210, height = 1.5*70, units = "mm", res = 400)
+  plotDendroAndColors(chor_net$dendrograms[[el]], x[chor_net$blockGenes[[el]]],
+                      "Module colors",
+                      dendroLabels = FALSE, hang = 0.03,
+                      addGuide = TRUE, guideHang = 0.05)
+  dev.off()
+  
+  p = ggplot() + 
+    background_image(readPNG(sprintf("WGCNA_dend_%s.png", el))) + theme(plot.margin = margin(t=0, l=0, r=0, b=0))
+  
+  return(p)
+})
+
+pl
+```
+
+
+
+```{r}
+ndir("fig3_res")
+el = setNames(c("Scale Free Topology Model Fit", "Max connectivity", "Mean connectivity", "Median connectivity"), c("SFT.R.sq", "max.k.", "mean.k.", "median.k."))
+
+x = as.data.frame(sft$fitIndices %>% pivot_longer(cols = names(el), values_to = "Value", names_to = "feature")) %>%
+  mutate(feature = factor(el[feature], levels = el))
+
+p = ggplot() +
+  geom_point(data = x, mapping = aes(x = Power, y = Value), color = "gray75") +
+  geom_text(data = x, mapping = aes(x = Power, y = Value, label = Power), size = 2.5) +
+  facet_wrap(~feature,scales = "free_y", ncol = 2) + theme_bw() + theme(panel.grid = element_blank()) + labs(title = "WGCNA diagnostics")
+
+ggsave(p, filename = "WGCNAsupp.png", width = 210, height = 120, units = "mm", scale = 1.5, dpi = 400)
+ggsave(p, filename = "WGCNAsupp.pdf", width = 210, height = 120, units = "mm", scale = 1.5, dpi = 400)
+#mcsaveRDS(p, file = "WGCNAsupp_a.rds")
+```
+```{r}
+pl[[length(pl)+1]] = pl[[1]]
+pl[[1]] = p
+```
+
+```{r}
+ndir("fig3_res")
+ggsave(ggarrange(plotlist = pl, nrow = length(pl), ncol = 1, heights = c(2, rep(1, times = length(pl)-1))),
+       width = 210, height = 70*(length(pl) + 1), filename = "WGCNAsupp.png", dpi = 400, units = "mm", scale = 1)
+
+ggsave(ggarrange(plotlist = pl, nrow = length(pl), ncol = 1, heights = c(2, rep(1, times = length(pl)-1))),
+       width = 210, height = 70*(length(pl) + 1), filename = "WGCNAsupp.pdf", dpi = 400, units = "mm", scale = 1)
+```
+
+
+
+
+
+```{r}
+
+```
+
+
+
+```{r}
+adj=abs(cor(datExpr,use="p"))^6
+
+conn=intramodularConnectivity(adj, chor_net$colors[colnames(adj)])
+
+
+conn = conn %>% tibble::rownames_to_column("ensg") %>%
+  mutate(symbol = trl$hgnc_symbol[match(ensg, trl$ensembl_gene_id)], ME = chor_net$colors[ensg]) %>%
+  arrange(-kDiff)
+
+conn
+```
+
+
+```{r}
+library(STRINGdb)
+ndir("stringdb")
+sdb = STRINGdb$new(version="11.5", species=9606, score_threshold=400, network_type="full")
+```
+
+
+
+
+```{r}
+num = 3
+sdb_map = sdb$map(data.frame(gene = names(chor_net$colors) [chor_net$colors %in% num]), "gene", removeUnmappedRows = TRUE)
+sdb_int = sdb$get_interactions(sdb_map$STRING_id)
+
+sdb_graph = tbl_graph(edges = sdb_int) %>% activate("nodes") %>% mutate(centrality = centrality_betweenness(), connectivity = conn[sdb_map$gene[match(name, sdb_map$STRING_id)],]$kDiff)
+el = sdb_graph %>% data.frame()
+df = conn %>% filter(ME == num)
+df$centrality = el$centrality[match(sdb_map$STRING_id[match(df$ensg, sdb_map$gene)], el$name)] 
+df = df %>% arrange(-centrality) %>% filter(!(symbol == "" | is.na(centrality) | duplicated(symbol))) %>% mutate(kFrac = 100*kWithin/kTotal) 
+```
+
+
+
+```{r}
+el = sdb_int %>% filter(from == "9606.ENSP00000325589" | to == "9606.ENSP00000325589")
+el = unique(c(el$from, el$to))
+
+
+el = df %>% filter((kFrac >= kFrac[order(kFrac, decreasing = T)][25]) | (centrality >= centrality[order(centrality, decreasing = T)][25]) | ensg %in% sdb_map$gene[match(el, sdb_map$STRING_id)])
+
+el = el %>% left_join(res %>% mutate(ensg = ensembl_gene_id), by = "ensg") %>% mutate(ff = ifelse(log2FoldChange_CI_CC>0 & padj_CI_CC<0.05, "bold", "plain")) %>% filter(!duplicated(ensg))
+el
+```
+
+
+
+
+
+
+```{r}
+set.seed(1995)
+p_mod3 = tbl_graph(edges = sdb_int %>% filter(from %in% (sdb_map %>% filter(gene %in% el$ensg))$STRING_id & to %in% (sdb_map %>% filter(gene %in% el$ensg))$STRING_id)) %>%
+  activate("nodes") %>%
+  mutate(ensg = sdb_map$gene[match(name, sdb_map$STRING_id)]) %>% left_join(el, by = "ensg")
+
+p_mod3 = p_mod3 %>% 
+  ggraph(layout = 'lgl', root = which((p_mod3 %>% data.frame())$symbol == "PTPRC")) +
+  geom_edge_link(aes(width = combined_score), colour = "gray", alpha = 0.2) + 
+  scale_edge_width(range = c(0.1, 2), name = "STRING\nscore") +
+  geom_node_point(aes(color = kFrac, size = centrality)) +
+  scale_size(trans = "log10", range = c(0.5, 8), name = "STRING\ncentrality") +
+  scale_color_gradientn(colors = c("azure", "lightskyblue", "palegreen", "yellow", "red", "red4"), name = "WGCNA\nconnectivity", limits = c(0,100)) +
+  geom_node_text(aes(label = symbol, fontface = ff), colour = 'black', size = 2.5) +
+  labs(title = "WGCNA module 3") +
+  theme_void() + theme(plot.background = element_rect(fill = "white", color = "white"), legend.position = "right", plot.margin = margin(t = 1, r = 5, b = 5, l = 1, unit = "mm"), plot.title = element_text(hjust = 0.5))
+
+p_mod3$data$y[p_mod3$data$symbol=="FYB"] = p_mod3$data$y[p_mod3$data$symbol=="FYB"] + 0.5
+p_mod3$data$y[p_mod3$data$symbol=="PTPRC"] = p_mod3$data$y[p_mod3$data$symbol=="PTPRC"] + 1
+p_mod3$data$x[p_mod3$data$symbol=="PTPRC"] = p_mod3$data$x[p_mod3$data$symbol=="PTPRC"] - 0.5
+p_mod3$data$y[p_mod3$data$symbol=="PTPRCAP"] = p_mod3$data$y[p_mod3$data$symbol=="PTPRCAP"] + 1
+p_mod3$data$y[p_mod3$data$symbol=="AIF1"] = p_mod3$data$y[p_mod3$data$symbol=="AIF1"] + 0.5
+p_mod3$data$y[p_mod3$data$symbol=="CD28"] = p_mod3$data$y[p_mod3$data$symbol=="CD28"] - 2
+p_mod3$data$x[p_mod3$data$symbol=="CD28"] = p_mod3$data$x[p_mod3$data$symbol=="CD28"] + 3
+p_mod3$data$y[p_mod3$data$symbol=="FCGR3A"] = p_mod3$data$y[p_mod3$data$symbol=="FCGR3A"] + 0.8
+p_mod3$data$x[p_mod3$data$symbol=="CD3D"] = p_mod3$data$x[p_mod3$data$symbol=="CD3D"] - 5
+
+ndir("fig3_res")
+fig3d = p_mod3
+ggsave(fig3d + theme(plot.background = element_rect(fill = "white", color = "white")), filename = "fig3d.png", width = 210/2, height = 297/4, units = "mm", dpi = 400, scale = 1.8)
+saveRDS(fig3d, file = "fig3d.rds")
+
+
+
+```
+
+
+
+
+
+```{r}
+num = 2
+sdb_map = sdb$map(data.frame(gene = names(chor_net$colors) [chor_net$colors %in% num]), "gene", removeUnmappedRows = TRUE)
+sdb_int = sdb$get_interactions(sdb_map$STRING_id)
+
+sdb_graph = tbl_graph(edges = sdb_int) %>% activate("nodes") %>% mutate(centrality = centrality_betweenness(), connectivity = conn[sdb_map$gene[match(name, sdb_map$STRING_id)],]$kDiff)
+el = sdb_graph %>% data.frame()
+df = conn %>% filter(ME == num)
+df$centrality = el$centrality[match(sdb_map$STRING_id[match(df$ensg, sdb_map$gene)], el$name)] 
+df = df %>% arrange(-centrality) %>% filter(!(symbol == "" | is.na(centrality) | duplicated(symbol))) %>% mutate(kFrac = 100*kWithin/kTotal)
+
+el = sdb_int %>% filter(from == "	9606.ENSP00000296946" | to == "9606.ENSP00000296946")
+el = unique(c(el$from, el$to))
+
+el = df %>% filter((kFrac >= kFrac[order(kFrac, decreasing = T)][40]) | (centrality >= centrality[order(centrality, decreasing = T)][40]) | ensg %in% sdb_map$gene[match(el, sdb_map$STRING_id)])
+
+el$symbol[el$symbol =="T"] = "TBXT"
+
+el = el %>% left_join(res %>% mutate(ensg = ensembl_gene_id), by = "ensg") %>% mutate(ff = ifelse(log2FoldChange_Ch_NP>0 & padj_Ch_NP<0.05, "bold", "plain")) %>% filter(!duplicated(ensg))
+
+set.seed(1995)
+p_mod2 = tbl_graph(edges = sdb_int %>% filter(from %in% (sdb_map %>% filter(gene %in% el$ensg))$STRING_id & to %in% (sdb_map %>% filter(gene %in% el$ensg))$STRING_id)) %>%
+  activate("nodes") %>%
+  mutate(ensg = sdb_map$gene[match(name, sdb_map$STRING_id)]) %>% left_join(el, by = "ensg") %>%
+  ggraph(layout = 'fr') +
+  geom_edge_link(aes(width = combined_score), colour = "gray", alpha = 0.2) + 
+  scale_edge_width(range = c(0.1, 2), name = "STRING score") +
+  geom_node_point(aes(color = kFrac, size = centrality)) +
+  scale_size(trans = "log10", range = c(0.5, 8), name = "STRING central.") +
+  scale_color_gradientn(colors = c("azure", "lightskyblue", "palegreen", "yellow", "red", "red4"), name = "WGCNA conn.", limits = c(0,100)) +
+  geom_node_text(aes(label = symbol, fontface = ff), colour = 'black', size = 2.5) +
+  labs(title = "WGCNA module 2") +
+  theme_void() + theme(plot.background = element_rect(fill = "white", color = "white"), legend.position = "right", plot.margin = margin(t = 1, r = 5, b = 5, l = 1, unit = "mm"), plot.title = element_text(hjust = 0.5))
+
+p_mod2$data$y[p_mod2$data$symbol=="ATM"] = p_mod2$data$y[p_mod2$data$symbol=="ATM"] - 0.6
+p_mod2$data$x[p_mod2$data$symbol=="RPA1"] = p_mod2$data$x[p_mod2$data$symbol=="RPA1"] - 2
+p_mod2$data$x[p_mod2$data$symbol=="ERBB2"] = p_mod2$data$x[p_mod2$data$symbol=="ERBB2"] + 1
+p_mod2$data$y[p_mod2$data$symbol=="ERBB2"] = p_mod2$data$y[p_mod2$data$symbol=="ERBB2"] + 1
+p_mod2$data$x[p_mod2$data$symbol=="MDM2"] = p_mod2$data$x[p_mod2$data$symbol=="MDM2"] - 0.8
+p_mod2$data$y[p_mod2$data$symbol=="MDM2"] = p_mod2$data$y[p_mod2$data$symbol=="MDM2"] + 1
+```
+
+
+```{r}
+ndir("fig3_res")
+fig3e = p_mod2
+ggsave(fig3e + theme(plot.background = element_rect(fill = "white", color = "white")), filename = "fig3e.png", width = 210/2, height = 297/4, units = "mm", dpi = 400, scale = 1.8)
+saveRDS(fig3d, file = "fig3e.rds")
+```
+```{r}
+ndir("fig3_res")
+fig3c = mcreadRDS("fig3c.rds")
+```
+
+
+```{r}
+ggsave(ggarrange(fig3a, fig3b, fig3c, ggarrange(fig3d, fig3e, nrow = 2, ncol = 1, common.legend = T, legend = "right", labels = c("d", "e")),
+          nrow = 2, ncol = 2, labels = c("a", "b", "c", ""))+ theme(plot.background = element_rect(fill = "white", color = "white")),
+       filename = "figure3.png", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+
+ggsave(ggarrange(fig3a, fig3b, fig3c, ggarrange(fig3d, fig3e, nrow = 2, ncol = 1, common.legend = T, legend = "right", labels = c("d", "e")),
+          nrow = 2, ncol = 2, labels = c("a", "b", "c", ""))+ theme(plot.background = element_rect(fill = "white", color = "white")),
+       filename = "figure3.pdf", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+```{r}
+fig3d = ggarrange(p_mod2, p_mod3, common.legend = T, legend = "right", nrow = 1, ncol = 2) + theme(plot.background = element_rect(fill = "white", color = "white"))
+
+ndir("fig3_res")
+ggsave(fig3d, filename = "fig3d.png", width = 210, height = 0.5*0.6*297, units = "mm", dpi = 400, scale = 2)
+saveRDS(p, file = "fig3d.rds")
+
+```
+```{r}
+ndir("fig3_res")
+fig3c = readRDS("fig3c.rds")
+```
+
+```{r}
+ggsave(ggarrange(ggarrange(fig3a, fig3b, labels = c("a", "b"), ncol = 2, nrow = 1), fig3c, fig3d, ncol = 1, nrow = 3, labels = c("", "c", "d"), heights = c(10, 4, 6))+ theme(plot.background = element_rect(fill = "white", color = "white")), filename = "Figure3.png", width = 210, height = 297, units = "mm", dpi = 400, scale = 2)
+```
+
+
+```{r}
+cl = hclust(dist(t(chor_net$MEs)), method = "ward.D")
+
+plot(cl)
+```
+
+
+
+```{r}
+
+rt = data.frame(clust  = cl$labels[cl$order])
+
+rt$p_source =  sapply(rt$clust, function(el){wilcox.test(as.formula(paste0(el, " ~ source")), data = eig_sam)$p.value})
+rt$padj_source = p.adjust(rt$p_source, method = "BH")
+rt$Z_source = log2(colMeans(eig_sam[eig_sam$source == "chordoma",grepl("ME", colnames(eig_sam))])[rt$clust] + 1) - log2(colMeans(eig_sam[eig_sam$source == "nucleus_pulposus",grepl("ME", colnames(eig_sam))])[rt$clust] + 1)
+
+rt$p_sex =  sapply(rt$clust, function(el){wilcox.test(as.formula(paste0(el, " ~ sex")), data = eig_sam[eig_sam$source=="chordoma",])$p.value})
+rt$padj_sex = p.adjust(rt$p_sex, method = "BH")
+rt$Z_sex = log2(colMeans(eig_sam[eig_sam$source == "chordoma" & eig_sam$sex == "female",grepl("ME", colnames(eig_sam))])[rt$clust] + 1) -
+  log2(colMeans(eig_sam[eig_sam$source == "chordoma" & eig_sam$sex == "male",grepl("ME", colnames(eig_sam))])[rt$clust] + 1)
+
+
+rt$p_ccj =  sapply(rt$clust, function(el){wilcox.test(as.formula(paste0(el, " ~ CCJ")), data = eig_sam[eig_sam$source=="chordoma",])$p.value})
+rt$padj_ccj = p.adjust(rt$p_ccj, method = "BH")
+rt$Z_ccj = log2(colMeans(eig_sam[eig_sam$source == "chordoma" & eig_sam$CCJ == "yes",grepl("ME", colnames(eig_sam))])[rt$clust] + 1) -
+  log2(colMeans(eig_sam[eig_sam$source == "chordoma" & eig_sam$CCJ == "no",grepl("ME", colnames(eig_sam))])[rt$clust] + 1)
+
+
+rt$p_methylation_cluster =  sapply(rt$clust, function(el){wilcox.test(as.formula(paste0(el, " ~ type")), data = eig_sam[eig_sam$source=="chordoma",])$p.value})
+rt$padj_methylation_cluster = p.adjust(rt$p_methylation_cluster, method = "BH")
+rt$Z_methylation_cluster = log2(colMeans(eig_sam[eig_sam$source == "chordoma" & eig_sam$type == "chordoma_I",grepl("ME", colnames(eig_sam))])[rt$clust] + 1) -
+  log2(colMeans(eig_sam[eig_sam$source == "chordoma" & eig_sam$type == "chordoma_C",grepl("ME", colnames(eig_sam))])[rt$clust] + 1)
+
+
+rt$p_age =  sapply(rt$clust, function(el){cor.test(eig_sam[!is.na(eig_sam$age),el], eig_sam[!is.na(eig_sam$age),"age"], method = "spearman")$p.value})
+rt$padj_age = p.adjust(rt$p_age, method = "BH")
+rt$Z_age =  sapply(rt$clust, function(el){cor(eig_sam[!is.na(eig_sam$age),el], eig_sam[!is.na(eig_sam$age),"age"], method = "spearman")})
+
+library(survival)
+eig_sam$surv = Surv(eig_sam$days, as.numeric(eig_sam$alive == "no"))
+x = sapply(rt$clust, function(el){
+  x = summary(coxph(as.formula(paste0("surv ~ ", el)), data = eig_sam))
+  return(c(x$coefficients[el,4], x$coefficients[el,5]))
+})
+rownames(x) = c("Z_surv", "p_surv")
+x = as.data.frame(t(x))
+
+p = NULL
+
+for(el in colnames(rt)[grepl("p_", colnames(rt))]){
+  p = c(p, rt[,el])
+}
+
+el = NULL
+for(em in colnames(rt)[grepl("Z_", colnames(rt))]){
+  el = c(el, rt[,em])
+}
+
+
+x$Z_surv = x$Z_surv*mean(abs(el[p>0.05]))/mean(abs(x$Z_surv))
+x$padj_surv = p.adjust(x$p_surv, method = "BH")
+
+rt = cbind(rt, x[rt$clust,])
+rt
+```
+
+```{r}
+df = NULL
+for(el in  c("source", "methylation_cluster", "ccj", "surv", "age", "sex")){
+  em = rt[,c("clust", paste0(c("p_", "padj_", "Z_"), el))]
+  em$comp = el
+  colnames(em) = c("clust", "p", "padj", "Z", "comp")
+  df = rbind(df, em)
+}
+df
+```
+
+
+
+```{r}
+library(ggdendro)
+library(ggnewscale)
+cl = hclust(dist(t(chor_net$MEs)), "ward.D")
+plot(cl)
+pdf = as.dendrogram(cl)
+pdf = dendro_data(pdf, type = "rectangle")
+segment(pdf)
+
+y = unique(df$comp)
+y = setNames(1:length(y), y)
+
+f = function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+p = ggplot() +
+  geom_segment(data = (pdf$segments) %>% mutate(spl = "Cluster"), mapping = aes(x = x, y = y/5 + 10, xend = xend, yend = yend/5  + 10)) +
+  geom_point(data = (pdf$labels)%>% mutate(spl = "Cluster"), mapping = aes(x = x, y = y/5 + 10, color = label), size = 3, pch = 15) +
+  scale_color_manual(values = ck, guide = "none") +
+  new_scale_color() +
+    geom_point(data = df %>% mutate(spl = "Features", x = pdf$labels$x[match(clust, pdf$labels$label)], y = y[match(comp, names(y))]),
+                      mapping = aes(x = x, y = y, fill = Z, color = ifelse(padj < 0.05, "yes", "no"), size = p), pch = 21) +
+    scale_color_manual(name = "significant", breaks = c("yes", "no"), values = c("black", "transparent")) +
+  scale_fill_gradientn(limits = c(-1,1), values = f(c(-1, -rev(quantile(abs(x$Z))), 0, quantile(abs(x$Z)), 1)), colors = rev(RColorBrewer::brewer.pal(13, name = "Spectral")), name = "effect") +
+  scale_x_continuous(breaks = pdf$labels$x, labels = pdf$labels$label, limits = c(min(pdf$labels$x) - 0.5, max(pdf$labels$x) + 0.5), expand = c(0,0)) +
+  scale_y_continuous(breaks = y, labels = c("Chordoma\n(comp.nucl.pulp.)", "Chordoma I\n(comp.chord.C)", "CCJ", "Death", "Age", "Sex")) +
+  scale_size_continuous(trans = scales::trans_new(name = "p10", transform = function(el){-log10(el)}, inverse = function(el){10^(-el)}), name = "p-value", breaks = c(0.001, 0.01, 0.1, 1)) +
+  facet_grid(spl~., scales = "free_y", space = "free_y") +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+ndir("fig3_res")
+ggsave(p + theme(plot.background = element_rect(fill = "white", color = "white")), filename = "fig3c.png", width = 210, height = 0.5*0.4*297, units = "mm", dpi = 400, scale = 2)
+saveRDS(p, file = "fig3c.rds")
+```
+
+
+
+

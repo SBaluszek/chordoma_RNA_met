@@ -1,0 +1,1178 @@
+---
+title: "Figure 2"
+output: html_notebook
+---
+
+
+
+
+```{r}
+ndir = function(ndir){
+  if(!dir.exists(ndir)){
+    dir.create(ndir)
+  }
+  setwd(ndir)
+}
+
+dropNA = function(el){el[!is.na(el)]}
+
+pckgs = c("BiocManager", "ggplot2", "limma", "tidyverse", "readxl", "ggnewscale", "biomaRt", "ggrepel", "RColorBrewer", "mclust", "survival", "survminer", "data.table", "dplyr", "tidyr", "colorspace", "ComplexHeatmap", "tximport", "DESeq2")
+x = setdiff(pckgs, installed.packages())
+if(length(x>0)){
+  install.packages(x)
+}
+x = setdiff(pckgs, installed.packages())
+if(length(x>0)){
+  BiocManager::install(x, ask = F, update = T)
+}
+gh = c("trqwe" = "traversc/trqwe", "ggsankey" = "davidsjoberg/ggsankey")
+x = setdiff(names(gh), installed.packages())
+if(length(x>0)){
+  for(el in x){
+    devtools::install_github(gh[el])
+}}
+sapply(rev(c(pckgs, names(gh))), library, character.only = T)
+```
+
+```{r}
+ndir("fig1_res")
+spl = read.csv(file = "spl_clust.csv")
+clust = read_rds(file = "clustering_methyl.rds")
+nset = read_rds(file = "nset.rds")
+dmrs = read_rds(file = "dmrs.rds")
+dmps = fread("all_dmps.csv")
+```
+```{r}
+spl
+```
+
+
+```{r}
+#paste0(sapply(spl$sample, function(el){
+#  paste0("kallisto quant -i output/hg19_ki.idx -o output/", el, " -b 40 -t 5 --bias --fusion dt/", el, "_1.fastq.gz  dt/", el, "_2.fastq.gz; pizzly -k 31 --gtf output/Homo_sapiens.GRCh37.87.gtf.gz --fasta output/Homo_sapiens.GRCh37.cdna.all.fa.gz --output output/", el, "/pizzly output/", el, "/fusion.txt")
+#}), collapse = "; ")
+```
+
+```{r}
+'library(biomaRt)
+ensembl = useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", GRCh = 37, mirror = "www")
+trl = getBM(attributes=c("ensembl_gene_id", "ensembl_transcript_id", "hgnc_symbol", "entrezgene_id" ,"gene_biotype", "start_position", "end_position", "chromosome_name", "strand"), mart= ensembl)
+
+trl$chromosome_name = factor(trl$chromosome_name, levels = unique(c(as.character(1:22), "X", "Y", trl$chromosome_name)))
+trl = trl[order(trl$chromosome_name),]files = sapply(spl$sample, function(el){
+  file.path("dt", el, "/abundance.h5")
+})
+txi.kallisto <- tximport(files, type = "kallisto", txOut = T, txIn = T)
+
+tr.key = data.frame(rn = rownames(txi.kallisto$counts))
+
+tr.key = cbind(tr.key, trl[match(sapply(strsplit(tr.key$rn, "\\."), function(el){el[1]}), trl$ensembl_transcript_id),])
+
+rownames(tr.key) = tr.key$rn
+
+tr.key'
+
+ndir("fig2_res")
+#save(tr.key, file = "transcripts_key.Rdata")
+load(file = "transcripts_key.Rdata")
+```
+
+```{r}
+mean(sapply(intersect(spl$sample, list.files("dt")), function(el){
+rjson::fromJSON(file = paste0("D:/Files/Molecular_data/chordoma_RNAseq/output/", el, "/run_info.json"))$p_pseudoaligned
+}))
+```
+
+```{r}
+mean(sapply(intersect(spl$sample, list.files("dt")), function(el){
+rjson::fromJSON(file = paste0("D:/Files/Molecular_data/chordoma_RNAseq/output/", el, "/run_info.json"))$n_processed
+}))
+```
+
+
+
+```{r}
+files = sapply(intersect(spl$sample, list.files("dt")), function(el){
+  file.path("dt", el, "abundance.h5")
+})
+txi.kallisto <- tximport(files, type = "kallisto", txOut = F, txIn = T, tx2gene = tr.key[,c("rn", "ensembl_gene_id")])
+```
+
+```{r}
+'library(biomaRt)
+ensembl = useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", GRCh = 37, mirror = "www")
+trl = getBM(attributes=c("ensembl_gene_id", "hgnc_symbol", "entrezgene_id" ,"gene_biotype", "start_position", "end_position", "chromosome_name", "strand"), mart= ensembl)
+
+trl$chromosome_name = factor(trl$chromosome_name, levels = unique(c(as.character(1:22), "X", "Y", trl$chromosome_name)))
+trl = trl[order(trl$chromosome_name),]'
+ndir("fig2_res")
+#saveRDS(trl, file = "trl.rds")
+trl = mcreadRDS("trl.rds")
+```
+
+
+
+
+```{r}
+dds <- DESeqDataSetFromTximport(txi.kallisto, spl[match(colnames(txi.kallisto$abundance), spl$sample),], ~source)
+dim(dds)
+dds <- dds[rowSums(counts(dds) > 4)>9,]
+dim(dds)
+dds$source = relevel(dds$source, ref = "nucleus_pulposus")
+dds <- DESeq(dds)
+ds.res <- results(dds)
+ds.res = as.data.frame(ds.res)
+```
+
+```{r}
+ndir("fig2_res")
+#log_c <- assay(vst(dds, blind=FALSE))
+#write_rds(log_c, file = "log_c.rds")
+#write.csv(log_c, file = "chordoma_reads.csv")
+log_c = readRDS("log_c.rds")
+```
+
+
+```{r}
+subset_txi = function(txi, spls){
+  txi = lapply(txi, function(el){
+    if(is.matrix(el)){
+      el = el[,spls]
+      return(el)
+    } else if (is.list(el)){
+      el = el[spls]
+    } else{
+      return(el)
+    }})
+  return(txi)
+}
+```
+
+
+
+
+
+```{r}
+dm = matrix(c("chordoma_I", "chordoma_C", "chordoma_I", "nucleus_pulposus","chordoma_C", "nucleus_pulposus"), nrow = 3, byrow = T)
+l2s = setNames(c("CI", "CC", "NP"), c("chordoma_I", "chordoma_C", "nucleus_pulposus"))
+l2s
+```
+
+
+
+```{r}
+spl$type[spl$source == "nucleus_pulposus"] = "nucleus_pulposus"
+res = apply(dm, 1, function(el){
+  print(el)
+  x = subset_txi(txi.kallisto, intersect(colnames(txi.kallisto$abundance),spl$sample[spl$type %in% el]))
+  dds <- DESeqDataSetFromTximport(x, spl[match(colnames(x$abundance), spl$sample),], ~type)
+  dds <- dds[rowSums(counts(dds) > 4)>9,]
+  dds$type = relevel(dds$type, ref = el[2])
+  dds <- DESeq(dds)
+  ds.res <- results(dds)
+  ds.res = as.data.frame(ds.res) %>% rename_with(function(em){paste0(em, "_", paste0(l2s[el], collapse = "_"))})
+  return(ds.res)
+})
+
+res = lapply(res, function(el){
+  el[rownames(ds.res),]
+})
+
+res[[4]] = ds.res %>% rename_with(function(em){paste0(em, "_Ch_NP")})
+res = do.call(cbind, res[c(4,1,2,3)])
+
+res$ensembl_gene_id = rownames(res)
+res = left_join(res, trl, by = "ensembl_gene_id")
+res
+```
+
+```{r}
+res = left_join(res,
+          as.data.frame(scran::modelGeneCV2(log_c)[res$ensembl_gene_id,]) %>% rename_with(function(em){paste0(em, "_cv2")}) %>% rownames_to_column("ensembl_gene_id"),
+          by = "ensembl_gene_id")
+```
+
+```{r}
+M = getM(nset)
+colnames(M) = spl$sample[match(colnames(M), spl$file)]
+```
+
+
+```{r}
+gm = strsplit(dmps$UCSC_RefGene_Name, ";")
+gm = data.frame(probe = rep(dmps$probe, times = sapply(gm, length)),
+                gene = unlist(gm),
+                relation = unlist(strsplit(dmps$UCSC_RefGene_Group, ";")))
+gm = setDT(gm) %>% mutate(relation = factor(relation, levels = c("TSS200", "TSS1500", "5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR"))) %>% arrange(relation) %>% distinct(probe, gene, .keep_all = T)
+
+gm = left_join(gm, as.data.frame(M) %>% rownames_to_column("probe"), by = "probe") %>% pivot_longer(cols = colnames(M), values_to = "M", names_to = "sample") %>% mutate(ensg = trl$ensembl_gene_id[match(gene, trl$hgnc_symbol)]) %>% mutate(adr = paste0(ensg, "_", sample))
+
+
+gm = left_join(gm,
+          as.data.frame(log_c) %>% rownames_to_column("ensg") %>% pivot_longer(cols = colnames(log_c), values_to = "G", names_to = "sample") %>% mutate(adr = paste0(ensg, "_", sample)),
+          by = "adr")
+```
+
+```{r}
+'corpb = gm %>% filter(!(is.na(G) | is.na(M))) %>% group_by(probe, gene) %>% summarise(pval = (cor.test(M, G, method = "kendall", exact = F))$p.value,
+                                                   tau = cor.test(M, G, method = "kendall", exact = F)$estimate,
+                                                   relation = unique(relation))
+
+corpb = corpb %>% arrange(pval) 
+corpb$padj = p.adjust(corpb$pval, method = "BH")
+corpb'
+
+ndir("fig2_res")
+#saveRDS(corpb, file = "corbp.rds")
+corpb = read_rds("corbp.rds")
+```
+
+
+```{r}
+prom = gm %>% filter(!(is.na(G) | is.na(M))) %>% filter(relation %in% c("TSS200", "TSS1500", "5'UTR")) %>% group_by(adr) %>%
+  summarise(M = mean(M), sample = unique(sample.x), gene = unique(gene), ensembl_gene_id = unique(ensg.x), G = unique(G))
+
+prom_res = prom %>% group_by(ensembl_gene_id) %>% summarise(met_pval = (cor.test(M, G, method = "kendall", exact = F))$p.value,
+                                         met_tau = cor.test(M, G, method = "kendall", exact = F)$estimate,
+                                         gene = unique(gene))
+
+prom_res$met_padj = p.adjust(prom_res$met_pval, method = "BH")
+prom_res %>% arrange(met_pval)
+
+#res = left_join(res, prom_res, by = "ensembl_gene_id")
+```
+
+```{r}
+ndir("fig2_res")
+#write.table(res, file = "res.csv", row.names = F, quote = F)
+res = fread("res.csv")
+```
+
+```{r}
+res$met
+```
+
+
+```{r}
+h = hclust(dist(scale(t(log_c[res$ensembl_gene_id[res$FDR_cv2<0.05],]))), method = "ward.D")
+mod = Mclust(scale(t(log_c[res$ensembl_gene_id[res$FDR_cv2<0.05],])), G = 3:10)
+```
+
+```{r}
+spl$mod = mod$classification[spl$sample]
+spl = spl %>% mutate(rna_type = ifelse(mod == 2, "nucleus_pulposus", ifelse(mod == 1, "chordoma_1", "chordoma_2")),
+               type = ifelse(is.na(mod1), NA, type))
+```
+
+```{r}
+cols = setNames(RColorBrewer::brewer.pal(5, "Set2"), c("chordoma_C", "nucleus_pulposus", "chordoma_I", "chordoma_2", "chordoma_1"))
+cols = cols[unique(c("chordoma_I", "chordoma_C", names(cols)))]
+cols
+```
+
+```{r}
+cols[spl$type[match(x %>% labels(), spl$sample)]]
+```
+```{r}
+spl$rna_type
+```
+
+
+```{r}
+library(png)
+f = function(x){ifelse(is.na(x), "nucleus_pulposus", x)}
+set.seed(1995)
+library(dendextend)
+y = clust
+x = h
+x$labels = ifelse(x$labels %in% c("NP7", "NP1"), "NP1.7", x$labels)
+y$labels = ifelse(y$labels %in% c("NP7", "NP1"), "NP1.7", y$labels)
+x = as.dendrogram(x)
+y = as.dendrogram(y)
+x = x %>% set("labels_colors", cols[f(spl$rna_type[match(x %>% labels(), spl$sample)])])
+y = y %>% set("labels_colors", cols[f(spl$type[match(y %>% labels(), spl$sample)])])
+
+dnd = dendlist(x, y)
+names(dnd) = c("Expression", "Methylation")
+
+pl = list()
+
+p = dnd %>%
+  untangle(method = "step1side")
+ndir("fig2_res")
+png(filename = "ent_s1s.png", width = 210, height = 297/2, res = 400, units = "mm")
+p = p %>% tanglegram(sub = sprintf("side1side\nentanglement: %s", round(entanglement(p), 2)), cex_sub = 1, cex_main = 1.5)
+dev.off()
+pl[["s1s"]] = p = ggplot() + 
+    background_image(readPNG(sprintf("ent_s1s.png", el))) + theme(plot.margin = margin(t=0, l=0, r=0, b=0))
+
+p = dnd %>%
+  untangle(method = "step2side")
+ndir("fig2_res")
+png(filename = "ent_s2s.png", width = 210, height = 297/2, res = 400, units = "mm")
+p = p %>% tanglegram(sub = sprintf("side2side\nentanglement: %s", round(entanglement(p), 2)), cex_sub = 1, cex_main = 1.5)
+dev.off()
+
+pl[["s2s"]] = p = ggplot() + 
+    background_image(readPNG(sprintf("ent_s2s.png", el))) + theme(plot.margin = margin(t=0, l=0, r=0, b=0))
+```
+
+
+```{r}
+ndir("fig2_res")
+ggsave(ggarrange(plotlist = pl, nrow = 2, ncol = 1), filename = "ENTsupp.png", width = 210, height = 297, units = "mm", scale = 1.5, dpi = 400)
+ggsave(ggarrange(plotlist = pl, nrow = 2, ncol = 1), filename = "ENTsupp.pdf", width = 210, height = 297, units = "mm", scale = 1.5, dpi = 400)
+```
+
+
+
+
+
+```{r}
+x = x %>% set("labels_colors" = rainbow(36))
+plot(x)
+```
+
+
+
+
+```{r}
+library(ggdendro)
+library(ggnewscale)
+
+pdf = as.dendrogram(h)
+pdf = dendro_data(pdf, type = "rectangle")
+segment(pdf)
+
+spl$type[spl$source == "nucleus_pulposus"] = "nucleus_pulposus"
+spl$x = setNames(1:max(h$order), h$labels[h$order])[spl$sample]
+
+
+ct = 1
+p = ggplot()
+
+p = p + geom_tile(data = spl %>% filter(!is.na(type)) %>% mutate(y = ct), aes(x = x, y = y, fill = type)) +
+  scale_fill_manual(name = "Methylation\ncluster", values = unname(cols), breaks = names(cols), labels = gsub("_", " ", names(cols)), guide = guide_legend(order = 3)) +
+  new_scale_fill()
+ct = ct + 1
+
+p = p + geom_tile(data = spl %>% filter(!is.na(type))%>% mutate(y = ct), aes(x = x, y = y, fill = sex)) +
+  scale_fill_manual(name = "Sex", values = c("male" = "skyblue", "female" = "pink"), guide = guide_legend(order = 2, nrow = 1)) +
+  new_scale_fill()
+ct = ct + 1
+
+p = p + geom_tile(data = spl %>% filter(!is.na(type))%>% mutate(y = ct), aes(x = x, y = y, fill = age)) +
+  scale_fill_gradientn(name = "Age", limits = c(0,80), colors = c("white", rev(viridis::viridis(10)), "black"), values = unname(c(0, quantile(spl$age[spl$source == "chordoma"], na.rm = T), 80))/80, guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 1)) +
+  new_scale_fill()
+ct = ct + 1
+
+p = p + geom_segment(data = (pdf$segments) %>% mutate(spl = "Cluster"), mapping = aes(x = x, y = y/100 + ct - 0.5, xend = xend, yend = yend/100  + ct - 0.5 )) 
+
+X = scale(t(log_c[res$ensembl_gene_id[res$FDR_cv2<0.05],h$labels]))
+X = X[!duplicated(rownames(X)), !duplicated(colnames(X))]
+cl = hclust(dist(t(X)))
+X = as.data.frame(X) %>% tibble::rownames_to_column("sample")
+X = X %>% pivot_longer(values_to = "M", names_to = "gene", cols = colnames(X)[!colnames(X) == "sample"]) %>% filter(!grepl("\\.", gene))
+y = setNames(1:max(cl$order), cl$label[cl$order])
+y = 5*max(sapply(ggplot_build(p)$data, function(el){max(el$y)}))*y/max(y)
+X$y = y[X$gene]
+X = X %>% filter(!is.na(y))
+
+X$x = setNames(1:max(h$order), h$labels[h$order])[X$sample]
+
+f = function(x){(x-min(x))/(max(x)-min(x))}
+
+p = p + geom_raster(data = X, aes(x = x, y = -y + 0.2, fill = M)) +
+  scale_fill_gradientn(name = "Scaled gene\nexpression", colors = rev(c("maroon1", "purple", "mediumpurple4", "gray20", "darkolivegreen", "forestgreen", "green")), values = unname(f(quantile(X$M, seq(0,1,1/8)))), guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 4)) +
+  new_scale_fill()
+
+p = p +
+  scale_x_continuous(breaks = 1:max(clust$order), labels = clust$labels[clust$order], expand = 0.01*c(1,1)) +
+  scale_y_continuous(expand = 0.01*c(1,1)) +
+  theme_void() + theme(plot.background = element_rect(fill = "white", color = "white"), plot.margin = margin(4,4,4,4)) #+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+fig2a = p
+```
+```{r}
+ndir("fig2_res")
+ggsave(p, filename = "fig2a.png", width = 0.6*210, height = 0.2*297, units = "mm", dpi = 400, scale = 1.8)
+#ggsave(p, filename = "fig1a.pdf", width = 210, height = 70, units = "mm", dpi = 400, scale = 1.8)
+mcsaveRDS(p, "fig2a.rds")
+
+ggsave(p + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)), filename = "fig2a_sn.png", width = 210, height = 100, units = "mm", dpi = 400, scale = 1.8)
+```
+
+```{r}
+df = res %>% arrange(-abs(log2FoldChange_CI_CC)) %>% filter(!duplicated(ensembl_gene_id)) %>% filter(!is.na(met_tau)) %>% mutate(met_ctrl = factor(ifelse(met_padj < 0.05 & met_tau < 0, "yes", "no"), levels = c("yes", "no")))
+
+x = do.call("rbind", lapply(c("Ch_NP", "CI_CC", "CI_NP", "CC_NP"), function(el){
+  rvel = paste0(rev(unlist(strsplit(el, "_"))), collapse = "_")
+  rt = df %>% dplyr::select(c("ensembl_gene_id", colnames(df)[grepl(el, colnames(df)) | grepl("met", colnames(df))])) %>% rename_with(function(em){gsub(sprintf("_%s", el), "", em)}) %>% filter(padj < 0.05) %>% mutate(gr = ifelse(log2FoldChange > 0, el, rvel))
+  return(rt)
+}))
+
+
+x = x %>% mutate(gr = factor(gr, levels = rev(c("CI_CC", "CC_CI", "Ch_NP", "CI_NP", "CC_NP", "NP_Ch", "NP_CI", "NP_CC"))))
+
+y = table(df$met_ctrl)
+y = setNames(gsub("NP", "Nucl. pulp.", gsub("CI", "Chord. I", gsub("CC", "Chord. C", gsub("Ch", "Chord.", gsub("_", "-", paste0(levels(x$gr), ifelse(p.adjust(lapply(levels(x$gr), function(el){
+  fisher.test(matrix(c(y, table((x %>% filter(gr == el))$met_ctrl)[names(y)]), nrow = 2))$p.value
+}), method = "BH") > 0.05, "", "*"))))))), levels(x$gr))
+
+levels(x$gr) = y
+
+
+library(ggmosaic)
+p = ggplot() +
+  geom_mosaic(data = x, aes(x = product(met_ctrl, gr), fill = met_ctrl), offset = 0, alpha = 1) +
+  scale_x_productlist(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,0.12), name = "Methylation-controlled genes frac.")  +
+  theme_bw() +
+  scale_fill_manual(breaks = c("yes", "no"), values = c("gold", "transparent")) +
+  theme(legend.position = "none", panel.grid = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank()) +
+  geom_hline(yintercept = table(df$met_ctrl)["yes"]/sum(table(df$met_ctrl)), linetype = "dotdash", color = "blue", lineend = "round") +
+  geom_segment(aes(x = 0.2, xend = 0.2 + (1000 / length(df$baseMean_Ch_NP)) , y = 0.09, yend = 0.09), color = "red4", size = 2) +
+  geom_text(aes(x = 0.2 + (500 / length(df$baseMean_Ch_NP)), y = 0.1, label = "1000 DEGs"), color = "red4")
+
+for(el in cumsum(table(x$gr)) / sum(table(x$gr))){
+  p = p + geom_vline(xintercept = el, color = "gray", alpha = 0.5)
+}
+
+
+ndir("fig2_res")
+ggsave(p, filename = "fig2b.png", width = 0.4*210, height = 0.2*297, units = "mm", scale = 1.8, dpi = 400)
+saveRDS(p, file = "fig2b.rds")
+fig2b = p
+```
+
+
+```{r}
+table(df$met_ctrl)/length(df$met_ctrl)
+```
+
+
+
+```{r}
+goi = list(CI_CC = c("TERT" = "TERT",
+                     "TNXB" = "TNXB",
+                     "LSP1" = "LSP1; MIR4298",
+                     #"CDH4" = "CDH4",
+                     #"CDH11" = "CDH11",
+                     #"BLM" = "BLM",
+                     "TBC1D16" = "TBC1D16",
+                     "FGF1" = "FGF1",
+                     "OPCML" = "OPCML",
+                     "PRDM16" = "PRDM16",
+                     "NOTCH2" = "NOTCH2",
+                     "NOTCH4" = "NOTCH4",
+                     "NFASC" = "NFASC",
+                     "REGA3" = "REGA3",
+                     "WNT5A" = "WNT5A",
+                     "HLA-D" = "HLA-DRA",
+                     "FGF3" = "FGF3",
+                     "CACNA1H" = "CACNA1H",
+                     "PTPRCAP,CORO1B" = "PTPRCAP; CORO1B",
+                     "RTL1,MIR431..." = "MIR431; MIR433; MIR127; MIR432; MIR136; RTL1",
+                     "KRT15,19;JUN" = "KRT15; KRT19; JUP",
+                     "MIR376C..." = "MIR376C; MIR376A2; MIR654; MIR376B; MIR376A1; MIR300; MIR1185-1; MIR1185-2; MIR381; MIR487B; MIR539; MIR889; MIR655; MIR487A; MIR382",
+                     "MIR519B..." = "MIR519B; MIR525; MIR523; MIR518F; MIR520B; MIR518B; MIR526A1",
+                     "MIR379..." = "MIR379; MIR411; MIR299; MIR380; MIR1197; MIR323A; MIR758; MIR329-1; MIR329-2; MIR494; MIR1193; MIR543"),
+           CI_NP = c("HOXD3" = "HOXD3",
+                     "TNXB" = "TNXB",
+                     "EGFR" = "EGFR",
+                     "TBC1D16" = "TBC1D16",
+                     "LSP1" = "LSP1",
+                     "TBXT" = "TBXT",
+                     "FENDRR" = "FENDRR",
+                     "RIPK4" = "RIPK4",
+                     "HOXD3,HAGLR" = "HOXD3; HAGLR",
+                     "HOXD10" = "HOXD10",
+                     "MIR10B,HOXD4" = "MIR10B; HOXD4",
+                     "FGF1" = "FGF1",
+                      "KRT15,19;JUN" = "KRT15; KRT19; JUP",
+                      "MORN1" = "MORN1",
+                      "VGLL4" = "VGLL4",
+                      "FGF1" = "FGF1",
+                     "MNX1" = "MNX1-AS1; MNX1",
+                      #"ARID5B" = "ARID5B",
+                      "HDAC4" = "HDAC4",
+                      #"BCL6" = "BCL6",
+                      #"CLDN9" = "CLDN9",
+                      #"HOXD9" = "HOXD9",
+                      "HOXD11" = "HOXD11",
+                     "NFIX" = "NFIX",
+                     "MIRLET7BHG" = "MIRLET7BHG",
+                      "HOXA11" = "HOXA11; HOXA11-AS",
+                     "HOXA9-10" = "HOXA10-AS; HOXA9; MIR196B; HOXA10-HOXA9; HOXA10",
+                      #"DLC1" = "DLC1",
+                      #"FGF2" = "FGF2",
+                      #"FGFR1" = "FGFR1",
+                      #"BLM" = "BLM",
+                      #"AGO2,EIF2C2" = "AGO2; EIF2C2",
+                      #"MAP2K2" = "MAP2K2",
+                      #"MAP2K3" = "MAP2K3",
+                      "OPCML" = "OPCML",
+                      #"HIF1A" = "HIF1A",
+                      #"KDM4B" = "KDM4B",
+                      #"GLI2" = "GLI2",
+                      #"YWHAQ" = "YWHAQ",
+                      #"PTCH1" = "PTCH1",
+                      #"NF2" = "NF2",
+                      #"DICER1" = "DICER1",
+                      #"MSI2" = "MSI2",
+                      #"TP63" = "TP63",
+                      #"MTOR" = "MTOR"
+                     "MGMT" = "MGMT"),
+           CC_NP = c("HOXD3" = "HOXD3",
+                     "TBC1D16" = "TBC1D16",
+                     "EGFR" = "EGFR",
+                     "RIPK4" = "RIPK4",
+                     "LSP1" = "LSP1",
+                     "TNXB" = "TNXB",
+                     "TBXT" = "TBXT",
+                     "FENDRR" = "FENDRR",
+                     "HOXD3,HAGLR" = "HOXD3; HAGLR",
+                     "HOXD10" = "HOXD10",
+                     "MIR10B,HOXD4" = "MIR10B; HOXD4",
+                     "FGF1" = "FGF1",
+                      "KRT15,19;JUN" = "KRT15; KRT19; JUP",
+                      "MORN1" = "MORN1",
+                      "VGLL4" = "VGLL4",
+                      "FGF1" = "FGF1",
+                     "NFIX" = "NFIX",
+                     "MIRLET7BHG" = "MIRLET7BHG",
+                     "MNX1" = "MNX1-AS1; MNX1",
+                      #"ARID5B" = "ARID5B",
+                      "HDAC4" = "HDAC4",
+                      #"BCL6" = "BCL6",
+                      #"CLDN9" = "CLDN9",
+                      #"HOXD9" = "HOXD9",
+                      "HOXD11" = "HOXD11",
+                     "HOXA11" = "HOXA11; HOXA11-AS",
+                     "HOXA9-10" = "HOXA10-AS; HOXA9; MIR196B; HOXA10-HOXA9",
+                      #"DLC1" = "DLC1",
+                      #"FGF2" = "FGF2",
+                      #"FGFR1" = "FGFR1",
+                      #"BLM" = "BLM",
+                      #"AGO2,EIF2C2" = "AGO2; EIF2C2",
+                      #"MAP2K2" = "MAP2K2",
+                      #"MAP2K3" = "MAP2K3",
+                      "OPCML" = "OPCML",
+                      #"HIF1A" = "HIF1A",
+                      #"KDM4B" = "KDM4B",
+                      #"GLI2" = "GLI2",
+                      #"YWHAQ" = "YWHAQ",
+                      #"PTCH1" = "PTCH1",
+                      #"NF2" = "NF2",
+                      #"DICER1" = "DICER1",
+                      #"MSI2" = "MSI2",
+                      #"TP63" = "TP63",
+                      #"MTOR" = "MTOR"
+                     "MGMT" = "MGMT")
+)
+
+goi = lapply(goi, function(el){setNames(names(el), el)})
+       
+'dmrs = dmrs %>% mutate(lab = ifelse(comp == "CI_CC", names(el)[match(gene, el)], NA)) %>% arrange(p)
+dmrs$lab[duplicated(dmrs$lab)] = NA'
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+```{r}
+res %>% filter(hgnc_symbol %in% unique(unlist(strsplit(unlist(c(names(goi$CI_CC))), "; ")))) %>% dplyr::select(hgnc_symbol, pvalue_CI_CC, padj_CI_CC, log2FoldChange_CI_CC) %>% arrange(pvalue_CI_CC)
+```
+```{r}
+ndir("fig2_res")
+df = readxl::read_xlsx("de_goi.xlsx")
+df
+```
+
+
+```{r}
+goi = unique((df %>% filter(Group == "Ch_NP"))$Gene)
+goi["T"] = "TBXT"
+
+p = res %>% arrange(-abs(log2FoldChange_Ch_NP)) %>% filter(!is.na(padj_Ch_NP)) %>% filter(!duplicated(ensembl_gene_id))
+
+p$hgnc_symbol[p$hgnc_symbol == "T"] = "TBXT"
+
+set.seed(1995)
+p = ggplot() +
+  geom_point(data = p, aes(x = log2FoldChange_Ch_NP, y = -log2(pvalue_Ch_NP), fill = ifelse(padj_Ch_NP > 0.05, "ns", ifelse(log2FoldChange_Ch_NP > 0, "up", "dn"))), pch = 21, color = "transparent") +
+  geom_text_repel(data = p %>% filter(hgnc_symbol %in% goi & log2FoldChange_Ch_NP > 0 & padj_Ch_NP < 0.05) %>% filter(!duplicated(hgnc_symbol)),
+                  aes(label = hgnc_symbol, x = log2FoldChange_Ch_NP, y = -log2(pvalue_Ch_NP)),
+                  size = 3, fontface = "bold", min.segment.length = 0, color = darken("deepskyblue", 0.3), nudge_x = 1, size = 3, max.overlaps = 12) +
+    geom_text_repel(data = p %>% filter(hgnc_symbol %in% goi & log2FoldChange_Ch_NP < 0 & padj_Ch_NP < 0.05) %>% filter(!duplicated(hgnc_symbol)),
+                  aes(label = hgnc_symbol, x = log2FoldChange_Ch_NP, y = -log2(pvalue_Ch_NP)),
+                  size = 3, fontface = "bold", min.segment.length = 0, color = darken(cols["nucleus_pulposus"], 0.3), nudge_x = -2,, size = 3, max.overlaps = 12) +
+  scale_fill_manual(breaks = c("up", "dn", "ns"), values = unname(alpha(c("deepskyblue", cols["nucleus_pulposus"], "gray"), 0.3)), labels = c("chordoma", "nucleus pulposus", "no"), name = "DEG") +
+  theme_bw() + theme(legend.position = "bottom", panel.grid = element_blank()) + scale_y_continuous(limits = c(0, -1.1*log2(min(p$pvalue_Ch_NP))), expand = c(0,0)) + labs(x = expression("log"[2]*" fold-change"), y = expression("-log"[2]*" p-value"))
+
+p
+
+ndir("fig2_res")
+ggsave(p, filename = "fig2c.png", width = 0.3*210, height = 297/5, units = "mm", scale = 1.8, dpi = 400)
+saveRDS(p, file = "fig2c.rds")
+```
+
+
+```{r}
+goi = unique(df$Gene)
+
+p = res %>% arrange(-abs(log2FoldChange_CI_CC)) %>% filter(!is.na(padj_CI_CC)) %>% filter(!duplicated(ensembl_gene_id))
+
+
+
+p = ggplot() +
+  geom_point(data = p, aes(x = log2FoldChange_CI_CC, y = -log2(pvalue_CI_CC), fill = ifelse(padj_CI_CC > 0.05, "ns", ifelse(log2FoldChange_CI_CC > 0, "up", "dn"))), pch = 21, color = "transparent") +
+  geom_text_repel(data = p %>% filter(hgnc_symbol %in% goi & log2FoldChange_CI_CC > 0 & padj_CI_CC < 0.05) %>% filter(!duplicated(hgnc_symbol)),
+                  aes(label = hgnc_symbol, x = log2FoldChange_CI_CC, y = -log2(pvalue_CI_CC)),
+                  size = 3, fontface = "bold", min.segment.length = 0, color = darken(cols["chordoma_I"], 0.3), nudge_x = 1, size = 3, max.overlaps = 12) +
+    geom_text_repel(data = p %>% filter(hgnc_symbol %in% goi & log2FoldChange_CI_CC < 0 & padj_CI_CC < 0.05) %>% filter(!duplicated(hgnc_symbol)),
+                  aes(label = hgnc_symbol, x = log2FoldChange_CI_CC, y = -log2(pvalue_CI_CC)),
+                  size = 3, fontface = "bold", min.segment.length = 0, color = darken(cols["chordoma_C"], 0.3), nudge_x = -2, size = 3, max.overlaps = 12) +
+  scale_fill_manual(breaks = c("up", "dn", "ns"), values = unname(alpha(c(cols["chordoma_I"], cols["chordoma_C"], "gray"), 0.3)), labels = c("chordoma I", "chordoma C", "no"), name = "DEG") +
+  theme_bw() + theme(legend.position = "bottom", panel.grid = element_blank()) + scale_y_continuous(limits = c(0, -1.1*log2(min(p$pvalue_CI_CC))), expand = c(0,0)) + labs(x = expression("log"[2]*" fold-change"), y = expression("-log"[2]*" p-value"))
+
+p
+
+ndir("fig2_res")
+ggsave(p, filename = "fig2d.png", width = 0.3*210, height = 297/5, units = "mm", scale = 1.8, dpi = 400)
+saveRDS(p, file = "fig2d.rds")
+```
+
+
+```{r}
+el = "LMF1; SOX8"
+f = function(x){
+  x = unlist(strsplit(x, "; "))
+  return((res %>% filter(hgnc_symbol %in% x) %>% arrange(abs(log2FoldChange_CI_CC))) $ hgnc_symbol[1])
+}
+f(el)
+```
+
+```{r}
+df = dmrs %>% filter(sig & comp == "CI_CC")
+#df = df[1:100,]
+
+x = setNames(dmps$UCSC_RefGene_Name, dmps$probe)
+y = setNames(dmps$UCSC_RefGene_Group, dmps$probe)
+z = strsplit(x, ";")
+z = data.frame(probe = rep(names(z), times = sapply(z, length)),
+               gene = unlist(strsplit(x, ";")),
+               relation = unlist(strsplit(y, ";"))) %>% distinct()
+               
+z = z %>% filter(probe %in% unlist(strsplit(df$probe, ";")))
+
+z$dmr = sapply(z$probe, function(el){
+  df$dmr[grepl(el, df$probe)]
+})
+
+z = z %>% distinct(gene, relation, dmr, .keep_all = T)
+
+df = dmrs %>% filter(sig & comp == "CI_CC")
+M = getM(nset)
+
+colnames(M) = spl$sample[match(colnames(M), spl$file)]
+
+x = z %>%
+  left_join(as.data.frame(M[rownames(M) %in% z$probe,]) %>% rownames_to_column("probe"), by = "probe") %>%
+  pivot_longer(cols = colnames(M), values_to = "M", names_to = "sample") %>%
+  group_by(dmr, sample) %>% summarise(mn = mean(M))
+```
+
+
+```{r}
+z = z %>% mutate(ensg = trl$ensembl_gene_id[match(gene, trl$hgnc_symbol)])
+
+dmrc = z %>% distinct(gene, relation, dmr, ensg) %>% left_join(as.data.frame(log_c) %>% rownames_to_column("ensg"), by = "ensg") %>% pivot_longer(cols = colnames(log_c), values_to = "gexp", names_to = "sample") %>% filter(!is.na(gexp)) %>% left_join(x, by = c("dmr", "sample")) %>% filter(!is.na(mn))
+
+dmrc = dmrc %>% group_by(dmr, gene, relation) %>% summarise(tau = cor(mn, gexp, method = "kendall"), p = cor.test(mn, gexp, method = "kendall")$p.value, ensembl_gene_id = unique(ensg)) %>% mutate(padj = p.adjust(p, method = "BH")) %>% arrange(p)
+
+
+dmrc = dmrc %>% left_join(df %>% dplyr::select(dB, sig, fdr, dmr), by = "dmr") %>% left_join(res %>% dplyr::select(ensembl_gene_id, log2FoldChange_CI_CC, padj_CI_CC))
+
+dmrc
+```
+
+```{r}
+sum((dmrs %>% filter(comp == "CI_CC" & sig))$ dB >0)
+sum((dmrs %>% filter(comp == "CI_CC" & sig))$ dB <0)
+```
+```{r}
+
+```
+
+```{r}
+dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau > 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0))[1]
+dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0))[1]
+dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau > 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0))[1]
+dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0))[1]
+```
+
+
+
+```{r}
+dct = c(" " = 6,
+        "All" = 5,
+        "DMRs\nwith gene" =4,
+        "Correlation" = 3,
+        "Relation\nto gene" = 2,
+        "DEGs" = 1,
+        "Examples" = 0
+        )
+
+df1 = data.frame(
+  x = c(3,9,
+        3,9,
+        1,3,5,7,9,11,
+        1,3,7,9),
+  y = c(5,5,
+        4,4,
+        3,3,3,3,3,3,
+        1,1,1,1),
+  num = c(sum((dmrs %>% filter(comp == "CI_CC" & sig))$ dB >0), sum((dmrs %>% filter(comp == "CI_CC" & sig))$ dB <0),
+          sum((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE))$dB > 0), sum((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE))$dB < 0),
+          dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau > 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj > 0.05))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau > 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj > 0.05))[1],
+          dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau > 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau > 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0))[1]
+          ),
+  col = c("chordoma_I", "chordoma_C",
+          "chordoma_I", "chordoma_C",
+          "positive", "negative", "n.s.", "positive", "negative", "n.s.",
+          "chordoma_I", "chordoma_C", "chordoma_C", "chordoma_I")
+)
+
+df1
+```
+
+```{r}
+df2 = data.frame(
+  x = c(3,9,
+        3,9,
+        3,9,
+        1,3,5,7,9,11,
+        1,3,7,9),
+  y = c(6,6,
+        5,5,
+        4,4,
+        3,3,3,3,3,3,
+        1,1,1,1),
+  lab = c("Chordoma I", "Chordoma C",
+    sum((dmrs %>% filter(comp == "CI_CC" & sig))$ dB >0), sum((dmrs %>% filter(comp == "CI_CC" & sig))$ dB <0),
+          sum((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE))$dB > 0), sum((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE))$dB < 0),
+          dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau > 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj > 0.05))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau > 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj > 0.05))[1],
+          dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau > 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau > 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0))[1], dim(dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0))[1]
+          ),
+  col = c(darken(cols["chordoma_I"], 0.2), darken(cols["chordoma_C"], 0.2),
+          rep("black", 14))
+)
+
+df2
+```
+
+
+
+```{r}
+df3 = data.frame(x =    c(3,3,3,3,1,3,3,3,3,3,3),
+                 xend = c(3,1,3,5,1,3,1,2,3,4,5),
+                 y =    c(5,4,4,4,3,3,1,1,1,1,1),
+                 yend = c(4,3,3,3,1,1,0.5,0.5,0.5,0.5,0.5))
+
+df3 = rbind(df3, df3 %>% mutate(x = x +6, xend = xend+6))
+```
+
+
+```{r}
+df4 = data.frame(x = c(1:5, 7:11),
+                 y = 0.5,
+                 lab = c((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC < 0) %>% arrange(tau))$gene[1:5],
+                         (dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0 & padj_CI_CC < 0.05, log2FoldChange_CI_CC > 0) %>% arrange(tau))$gene[1:5]),
+                 col = c(rep(darken(cols["chordoma_I"], 0.2),5), rep(darken(cols["chordoma_C"], 0.2),5)))
+
+
+df4
+```
+
+```{r}
+cols_gene = setNames(c("gray", rev(brewer.pal(n = 6, name = "Set1"))), rev(c("TSS200", "TSS1500", "5'UTR", "1stExon", "Body", "3'UTR", "Inter.")))
+df5 = data.frame(x = 11, y = 2, lab = factor(" ", levels = c("positive", "negative", "n.s.", " " )))
+df6 = data.frame(x = 11, y = 2, lab = factor(" ", levels = rev(c(" " , names(cols_gene)))))
+```
+
+```{r}
+ c(" " = "transparent", cols_gene)
+```
+
+
+```{r}
+
+
+
+fig2e = ggplot() +
+  geom_segment(data = df3, aes(x = x, xend = xend, y = y, yend = yend), color = "gray") +
+  geom_point(data = df1, aes(x = x, y = y, size = num, color = col)) +
+  scale_size_continuous(trans = "log10", range = c(2,12), guide = guide_none()) +
+  scale_color_manual(values = c(cols, setNames(c("violetred", "cyan4", "gray"), c("negative", "positive", "n.s."))), guide = guide_none()) +
+  new_scale_color() +
+  geom_text(data = df2, aes(x = x, y = y, colour = I(col), label = lab), fontface = "bold") +
+  geom_text(data = df4, aes(x = x, y = y, colour = I(col), label = lab), fontface = "bold", angle = 90, hjust = 1) +
+  new_scale_color() +
+  geom_point(data = df5, aes(x = x, y = y, color = lab)) +
+  scale_color_manual(values = c("positive" = "cyan4", "negative" = "violetred", "n.s" = "gray", " " = "transparent"), name = "Correlation", drop = F, guide = guide_legend(order = 1)) +
+  new_scale_color() +
+  geom_point(data = df6, aes(x = x, y = y, color = lab)) +
+  scale_color_manual(values = c(cols_gene, " " = "transparent"), name = "Relation\nto gene", drop = F, guide = guide_legend(order = 2)) +
+  scale_y_continuous(breaks = dct, limits = c(-1,6)) +
+  theme_void() + theme(axis.text.y = element_text(), legend.position = "right", plot.background = element_rect(fill = "white", color = "white"), plot.margin = margin(4,4,4,4))
+
+
+
+el = table((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau > 0)) $ relation) %>% data.frame() %>% mutate(Var1 = factor(Var1, levels = names(cols_gene)))
+p = ggplot() +
+  geom_bar(data = el, aes(x = 1, y = Freq, fill = Var1), stat = "identity")+
+  scale_fill_manual(values = cols_gene) +
+  coord_polar("y") +
+  theme_void() + theme(legend.position = "none")
+
+
+fig2e = fig2e + annotation_custom(ggplotGrob(p), ymin = 1.5, ymax = 2.5, 0, 2)
+
+el = table((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB > 0 & padj < 0.05 & tau < 0)) $ relation) %>% data.frame() %>% mutate(Var1 = factor(Var1, levels = names(cols_gene)))
+p = ggplot() +
+  geom_bar(data = el, aes(x = 1, y = Freq, fill = Var1), stat = "identity")+
+  scale_fill_manual(values = cols_gene) +
+  coord_polar("y") +
+  theme_void()+ theme(legend.position = "none") 
+
+
+fig2e = fig2e + annotation_custom(ggplotGrob(p), ymin = 1.5, ymax = 2.5, 2, 4)
+
+el = table((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau > 0)) $ relation) %>% data.frame() %>% mutate(Var1 = factor(Var1, levels = names(cols_gene)))
+p = ggplot() +
+  geom_bar(data = el, aes(x = 1, y = Freq, fill = Var1), stat = "identity")+
+  scale_fill_manual(values = cols_gene) +
+  coord_polar("y") +
+  theme_void() + theme(legend.position = "none")
+
+
+fig2e = fig2e + annotation_custom(ggplotGrob(p), ymin = 1.5, ymax = 2.5, 6, 8)
+
+el = table((dmrc %>% arrange(p) %>% distinct(dmr, .keep_all = TRUE) %>% filter(dB < 0 & padj < 0.05 & tau < 0)) $ relation) %>% data.frame() %>% mutate(Var1 = factor(Var1, levels = names(cols_gene)))
+p = ggplot() +
+  geom_bar(data = el, aes(x = 1, y = Freq, fill = Var1), stat = "identity")+
+  scale_fill_manual(values = cols_gene) +
+  coord_polar("y") +
+  theme_void() + theme(legend.position = "none")
+
+
+fig2e = fig2e + annotation_custom(ggplotGrob(p), ymin = 1.5, ymax = 2.5, 8, 10) 
+
+fig2e
+                                      
+```
+
+
+
+
+```{r}
+ndir("fig2_res")
+ggsave(fig2e, filename = "fig2e.png", width = 0.4*210, height = 297/5, units = "mm", scale = 1.8, dpi = 400)
+saveRDS(fig2e, file = "fig2e.rds")
+```
+
+
+
+
+```{r}
+B = getBeta(nset)
+colnames(B) = spl$sample[match(colnames(B), spl$file)]
+```
+
+
+
+
+
+```{r}
+pmet = as.data.frame(B[unique((gm %>% filter(gene == "T"))$probe),]) %>% rownames_to_column("probe") %>% pivot_longer(cols = colnames(B), values_to = "B", names_to = "sample") %>% mutate(type = spl$type[match(sample, spl$sample)], pos = dmps$pos[match(probe, dmps$probe)]) %>% arrange(-pos) %>% mutate(probe = factor(probe, levels = unique(probe)))
+
+pmet = ggplot() +
+  geom_boxplot(data = pmet, aes(x = probe, y = B, color = type), fill = "transparent") +
+  geom_text(data = dmps %>% filter(probe %in% pmet$probe) %>% mutate(gr = ifelse(p_Ch_NP < 9e-8, ifelse(abs(dB_Ch_NP) > 0.05, "***", "**"), ifelse(p_Ch_NP < 0.01, "*", ""))), aes(x = probe, y = 0.95, label = gr)) +
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_color_manual(values = cols) +
+  scale_y_continuous(limits = c(0,1), expand = c(0,0), name = "β-value") + labs(subtitle = "TBXT", x = "probe")
+
+for(el in 1:(length(unique((gm %>% filter(gene == "T"))$probe))-1)){
+  pmet = pmet + geom_vline(xintercept = el + 0.5, color = "gray80")
+}
+
+pmet
+
+
+
+pexp = data.frame(gene = log_c["ENSG00000164458", ], type = gsub("nucleus pulposus", "nucleus\npulposus", gsub("_", " ", spl$type[match(gsub("NP7", "NP1", colnames(log_c)), spl$sample)])))
+
+pexp = ggboxplot(data = pexp, x = "type", y = "gene", color = "type") + theme_bw() +
+  theme(panel.grid.minor = element_blank(),panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), legend.position = "none") +
+  scale_color_manual(values = unname(cols), breaks = gsub("nucleus pulposus", "nucleus\npulposus", gsub("_", " ", names(cols)))) + labs(x = "sample type",subtitle = sprintf("adj-p-val.: %s, p-val.: %s", signif(res$padj_Ch_NP[res$ensembl_gene_id == "ENSG00000164458"], 2), signif(res$pvalue_Ch_NP[res$ensembl_gene_id == "ENSG00000164458"], 2))) +
+  scale_y_continuous(name = "DESeq2 normalized expression level", limits = c(0, 1.05*max(pexp$gene)), expand = c(0,0))
+
+pexp
+
+
+pprom = prom %>% filter(ensembl_gene_id == "ENSG00000164458") %>% mutate(type = spl$type[match(sample, spl$sample)])
+
+pprom = ggplot() +
+  geom_point(data = pprom, aes(x = M, y = G, color = type)) +
+  theme_bw() + theme(panel.grid = element_blank(), legend.position = "none") +
+  scale_y_continuous(name = "DESeq2 normalized expression level", limits = c(0, 1.05*max(pprom$G)), expand = c(0,0)) +
+  scale_color_manual(values = cols) + labs(x = "Mean promoter M-value", y = "DESeq2 normalized expression level",subtitle = sprintf("Kendall adj-p-val.: %s, τ: %s", signif(res$met_padj[res$ensembl_gene_id == "ENSG00000164458"], 2), signif(res$met_tau[res$ensembl_gene_id == "ENSG00000164458"], 2)))
+
+p = ggarrange(pmet, pexp, pprom, nrow = 1, ncol = 3, widths = c(5,2,3), align = "h")
+
+ndir("fig2_res")
+ggsave(p, filename = "fig2f.png", width = 210, height = 297/5, units = "mm", scale = 2, dpi = 400)
+saveRDS(p, file = "fig2f.rds")
+```
+
+
+```{r}
+pmet = as.data.frame(B[unique((gm %>% filter(gene == "PTPRCAP"))$probe),]) %>% rownames_to_column("probe") %>% pivot_longer(cols = colnames(B), values_to = "B", names_to = "sample") %>% mutate(type = spl$type[match(sample, spl$sample)], pos = dmps$pos[match(probe, dmps$probe)]) %>% arrange(-pos) %>% mutate(probe = factor(probe, levels = unique(probe)))
+
+pmet = ggplot() +
+  geom_boxplot(data = pmet, aes(x = probe, y = B, color = type), fill = "transparent") +
+  geom_text(data = dmps %>% filter(probe %in% pmet$probe) %>% mutate(gr = ifelse(p_CI_CC < 9e-8, ifelse(abs(dB_CI_CC) > 0.05, "***", "**"), ifelse(p_CI_CC < 0.01, "*", ""))), aes(x = probe, y = 0.05, label = gr)) +
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_color_manual(values = cols) +
+  scale_y_continuous(limits = c(0,1), expand = c(0,0), name = "β-value") + labs(subtitle = "PTPRCAP", x = "probe")
+
+for(el in 1:(length(unique((gm %>% filter(gene == "PTPRCAP"))$probe))-1)){
+  pmet = pmet + geom_vline(xintercept = el + 0.5, color = "gray80")
+}
+
+
+
+
+
+pexp = data.frame(gene = log_c["ENSG00000213402", ], type = gsub("nucleus pulposus", "nucleus\npulposus", gsub("_", " ", spl$type[match(gsub("NP7", "NP1", colnames(log_c)), spl$sample)])))
+
+pexp = ggboxplot(data = pexp, x = "type", y = "gene", color = "type") + theme_bw() +
+  theme(panel.grid.minor = element_blank(),panel.grid.major.x = element_blank(), axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), legend.position = "none") +
+  scale_color_manual(values = unname(cols), breaks = gsub("nucleus pulposus", "nucleus\npulposus", gsub("_", " ", names(cols)))) + labs(x = "sample type",subtitle = sprintf("adj-p-val.: %s, p-val.: %s", signif(res$padj_CI_CC[res$ensembl_gene_id == "ENSG00000213402"], 2), signif(res$pvalue_CI_CC[res$ensembl_gene_id == "ENSG00000213402"], 2))) +
+  scale_y_continuous(name = "DESeq2 normalized expression level", limits = c(0, 1.05*max(pexp$gene)), expand = c(0,0))
+
+
+
+
+
+pprom = prom %>% filter(ensembl_gene_id == "ENSG00000213402") %>% mutate(type = spl$type[match(sample, spl$sample)])
+
+pprom = ggplot() +
+  geom_point(data = pprom, aes(x = M, y = G, color = type)) +
+  theme_bw() + theme(panel.grid = element_blank(), legend.position = "none") +
+  scale_y_continuous(name = "DESeq2 normalized expression level", limits = c(0, 1.05*max(pprom$G)), expand = c(0,0)) +
+  scale_color_manual(values = cols) + labs(x = "Mean promoter M-value", y = "DESeq2 normalized expression level",subtitle = sprintf("Kendall adj-p-val.: %s, τ: %s", signif(res$met_padj[res$ensembl_gene_id == "ENSG00000213402"], 2), signif(res$met_tau[res$ensembl_gene_id == "ENSG00000213402"], 2)))
+
+
+
+p = ggarrange(pmet, pexp, pprom, nrow = 1, ncol = 3, widths = c(5,2,3), align = "h")
+
+ndir("fig2_res")
+ggsave(p, filename = "fig2g.png", width = 210, height = 297/5, units = "mm", scale = 2, dpi = 400)
+saveRDS(p, file = "fig2g.rds")
+```
+
+```{r}
+library(annotatr)
+ann = build_annotations(genome = 'hg19', annotations = "hg19_basicgenes")
+ann = as.data.frame(ann)
+```
+
+```{r}
+cl = setNames(rainbow(3), c("TBXT", "CORO1B", "PTPRCAP"))
+cols_cgi = c("Island" = "burlywood4", "Shore" = "khaki", "Shelf" = "paleturquoise", "OpenSea" = "blue4")
+sbl = "T"
+gen_str = unique(trl$strand[trl$hgnc_symbol == sbl])
+
+df = dmps %>% filter(probe %in% (gm %>% filter(gene == sbl))$probe) %>% mutate(Relation = factor(gsub("S_", "", gsub("N_", "", Relation_to_Island)), levels = c("Island", "Shore", "Shelf", "OpenSea")))
+
+rlim = max(df$pos)
+llim = min(df$pos)
+
+p = ggplot() +
+  geom_text_repel(data = df, aes(x = pos, y = 0.01, label = probe), direction = "x", angle = 90, nudge_y = 0.02, hjust = 0)
+
+p = p + 
+  geom_point(data = df, aes(x = pos, y = 0.01, color = Relation), size = 4) +
+  geom_segment(data = df, aes(x = pos, xend = pos, y = 0.01, yend = 0, color = Relation)) + 
+  scale_color_manual(values = cols_cgi, drop = F, name = "Probe\nrelation") + 
+  new_scale_color() +
+  labs(x = unique(df$chr))
+
+x = dmrs %>% filter(start <= rlim & end >= llim & comp == "Ch_NP" & fdr < 0.05 & abs(dB) > 0.05 & chr == unique(df$chr))
+if(length(x$chr) > 0){
+  p = p + geom_segment(data = x, aes(x = start, xend = end, y = 0.01, yend = 0.01, color = fdr), size = 2)+
+  geom_point(data = x, aes(x = start, y = 0.01, color = fdr), size = 2) +
+  geom_point(data = x, aes(x = end, y = 0.01, color = fdr), size = 2) +
+  scale_color_gradientn(name = "DMR FDR", limits = c(1e-20,1), trans = "log10", colors = rev(c("gray", "blue", "purple", "red", "orange"))) +
+  new_scale_color()
+}
+
+library(ggarchery)
+sbl = "TBXT"
+x = ann %>% filter(symbol == sbl | (start <= rlim & end >=llim & seqnames == unique(df$chr)))
+j = 0
+x = x %>% mutate(y = (0.15 + 0.01 * (setNames(1:length(unique(x$symbol)), unique(x$symbol))-1))[symbol], beg = ifelse(strand =="+", start, end), fin = ifelse(strand =="+", end, start)) 
+
+p = p + geom_arrowsegment(data = x %>% filter(type == "hg19_genes_exons"), aes(x = beg, xend = fin, y = y, yend = y, color = symbol, fill = symbol), size = 2, arrows = arrow(type = 'closed', length = unit(2, "mm"))) +
+  geom_segment(data = x %>% filter(type %in% c("hg19_genes_3UTRs", "hg19_genes_introns", "hg19_genes_5UTRs")), aes(x = beg, xend = fin, y = y, yend = y, color = symbol)) +
+  geom_text(data = x %>% group_by(symbol) %>% summarise(y = unique(y) + 0.01, x = ((min(c(start, end))) + max(c(start, end)))/2), aes(x = x, y = y, color = symbol, label = symbol)) +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank()) + scale_y_continuous(limits = c(0,max(x$y) + 0.02), expand = c(0,0)) + scale_color_manual(values = cl, guide = F) + scale_fill_manual(values = cl, guide = F)
+
+x = x %>% filter(type %in% c("hg19_genes_exons", "hg19_genes_3UTRs", "hg19_genes_introns", "hg19_genes_5UTRs"))
+
+if(gen_str < 0){
+  p = p + scale_x_reverse()
+}
+
+p_tbxt = p
+
+x$y
+
+p_tbxt
+```
+
+```{r}
+
+```
+
+```{r}
+
+
+cols_cgi = c("Island" = "burlywood4", "Shore" = "khaki", "Shelf" = "paleturquoise", "OpenSea" = "blue4")
+sbl = "PTPRCAP"
+gen_str = unique(trl$strand[trl$hgnc_symbol == sbl])
+
+df = dmps %>% filter(probe %in% (gm %>% filter(gene == sbl))$probe) %>% mutate(Relation = factor(gsub("S_", "", gsub("N_", "", Relation_to_Island)), levels = c("Island", "Shore", "Shelf", "OpenSea")))
+
+rlim = max(df$pos)
+llim = min(df$pos)
+
+p = ggplot() +
+  geom_text_repel(data = df, aes(x = pos, y = 0.01, label = probe), direction = "x", angle = 90, nudge_y = 0.02, hjust = 0)
+
+p = p + 
+  geom_point(data = df, aes(x = pos, y = 0.01, color = Relation), size = 4) +
+  geom_segment(data = df, aes(x = pos, xend = pos, y = 0.01, yend = 0, color = Relation)) + 
+  scale_color_manual(values = cols_cgi, drop = F, name = "Probe\nrelation") + 
+  new_scale_color() +
+  labs(x = unique(df$chr))
+
+x = dmrs %>% filter(start <= rlim & end >= llim & comp == "CI_CC" & fdr < 0.05 & abs(dB) > 0.05 & chr == unique(df$chr))
+if(length(x$chr) > 0){
+  p = p + geom_segment(data = x, aes(x = start, xend = end, y = 0.01, yend = 0.01, color = fdr), size = 2)+
+  geom_point(data = x, aes(x = start, y = 0.01, color = fdr), size = 2) +
+  geom_point(data = x, aes(x = end, y = 0.01, color = fdr), size = 2) +
+  scale_color_gradientn(name = "DMR FDR", limits = c(1e-20,1), trans = "log10", colors = rev(c("gray", "blue", "purple", "red", "orange"))) +
+  new_scale_color()
+}
+
+library(ggarchery)
+
+x = ann %>% filter(symbol == sbl | (start <= rlim & end >=llim & seqnames == unique(df$chr)))
+j = 0
+x = x %>% mutate(y = (0.15 + 0.01 * (setNames(1:length(unique(x$symbol)), unique(x$symbol))-1))[symbol], beg = ifelse(strand =="+", start, end), fin = ifelse(strand =="+", end, start)) 
+
+p = p + geom_arrowsegment(data = x %>% filter(type == "hg19_genes_exons"), aes(x = beg, xend = fin, y = y, yend = y, color = symbol, fill = symbol), size = 2, arrows = arrow(type = 'closed', length = unit(2, "mm"))) +
+  geom_segment(data = x %>% filter(type %in% c("hg19_genes_3UTRs", "hg19_genes_introns", "hg19_genes_5UTRs")), aes(x = beg, xend = fin, y = y, yend = y, color = symbol)) +
+  geom_text(data = x %>% filter(type %in% c("hg19_genes_exons", "hg19_genes_3UTRs", "hg19_genes_introns", "hg19_genes_5UTRs")) %>% group_by(symbol) %>% summarise(y = unique(y) + 0.01, x = ((min(c(start, end))) + max(c(start, end)))/2), aes(x = x, y = y, color = symbol, label = symbol)) +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank()) + scale_y_continuous(limits = c(0,max(x$y) + 0.02), expand = c(0,0)) + scale_color_manual(values = cl, guide = F) + scale_fill_manual(values = cl, guide = F)
+
+x = x %>% filter(type %in% c("hg19_genes_exons", "hg19_genes_3UTRs", "hg19_genes_introns", "hg19_genes_5UTRs"))
+
+if(gen_str < 0){
+  p = p + scale_x_reverse(limits = c(max(c(rlim, x$start, x$end)), min(c(llim, x$start, x$end))), expand = c(0,0))
+} else {
+  p = p + scale_x_continous(limits = c(max(c(rlim, x$start, x$end)), min(c(llim, x$start, x$end))), expand = c(0,0))
+}
+
+p_ptprcap = p
+p_ptprcap
+```
+
+```{r}
+x$y
+```
+
+```{r}
+fig2g = ggarrange(p_tbxt, p_ptprcap, ncol = 1, nrow = 2, heights = c(12, 13), common.legend = T, legend = "right") + theme(panel.background = element_rect(fill = "white", color = "white"))
+ndir("fig2_res")
+ggsave(fig2g, filename = "fig2h.png", width = 210, height = 297/5, units = "mm", scale = 2, dpi = 400)
+saveRDS(fig2g, file = "fig2h.rds")
+```
+
+```{r}
+library(png)
+ndir("fig2_res")
+fig2a = readRDS("fig2a.rds")
+fig2b = readRDS("fig2b.rds")
+fig2c = readRDS("fig2c.rds")
+fig2d = readRDS("fig2d.rds")
+fig2e = readRDS("fig2e.rds")
+fig2f = readRDS("fig2f.rds")
+fig2g = readRDS("fig2g.rds")
+fig2h = readRDS("fig2h.rds")
+```
+
+```{r}
+fig2a
+```
+
+
+```{r}
+ggsave(ggarrange(ggarrange(fig2a, fig2b, widths = c(6,4), labels = c("a", "b")),
+                 ggarrange(fig2c, fig2d, fig2e, widths = c(3,3,4), labels = c("c", "d", "e"), nrow = 1, ncol = 3),
+                 fig2f, fig2g, fig2h, labels = c("", "", "f", "g", "h"),
+                 nrow = 5, ncol = 1),
+       filename = "figure2.png", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+```
+```{r}
+x = c(,,,)
+```
+
+
+
+```{r}
+library(png)
+ndir("fig2_res")
+fig2a <- readPNG("fig2a.png")
+fig2a <- ggplot() + background_image(fig2a)
+
+ggsave(ggarrange(ggarrange(fig2a, fig2b, widths = c(6,4), labels = c("a", "b")),
+                 ggarrange(fig2c, fig2d, fig2e, widths = c(3,3,4), labels = c("c", "d", "e"), nrow = 1, ncol = 3),
+                 fig2f, fig2g, fig2h, labels = c("", "", "f", "g", "h"),
+                 nrow = 5, ncol = 1),
+       filename = "figure2.pdf", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+
+```{r}
+ggsave(ggarrange(fig1a,
+                 ggarrange(fig1b, fig1c, fig1d, nrow = 1, ncol = 3, labels = c("b", "c", "d"), font.label = list(size = 12, face = "plain")),
+                 fig1e,
+                 labels = c("a", "", "e"), font.label = list(size = 12, face = "plain"), nrow = 3, ncol = 1, heights = c(6,12,7.4))+  theme(plot.background = element_rect(fill = "white")),
+       filename = "Fig1.png", width = 190.5, height = 254, units = "mm", dpi = 400, scale = 2)
+
+```
+
+

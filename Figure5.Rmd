@@ -1,0 +1,562 @@
+---
+title: "Figure 5"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+ndir = function(ndir){
+  if(!dir.exists(ndir)){
+    dir.create(ndir)
+  }
+  setwd(ndir)
+}
+
+dropNA = function(el){el[!is.na(el)]}
+
+pckgs = c("BiocManager", "ggplot2", "limma", "tidyverse", "readxl", "ggnewscale", "ggrepel", "RColorBrewer", "data.table", "dplyr", "tidyr", "colorspace", "msigdbr", "fgsea", "data.table", "GSEAlm", "IlluminaHumanMethylationEPICanno.ilm10b4.hg19")
+
+x = setdiff(pckgs, installed.packages())
+if(length(x)>0){
+  install.packages(x)
+}
+
+x = setdiff(pckgs, installed.packages())
+if(length(x)>0){
+  BiocManager::install(x, ask = F, update = T)
+  remove.package("conumee")
+}
+
+gh = setNames(c("SBaluszek/conumee"), c("conumee"))
+x = setdiff(names(gh), installed.packages())
+for(el in x){
+  devtools::install_github(gh[el])
+}
+sapply(c(pckgs, names(gh)), library, character.only = T)
+```
+
+```{r}
+ndir("fig1_res")
+spl = read.csv(file = "spl_clust.csv")
+clust = read_rds(file = "clustering_methyl.rds")
+```
+
+
+```{r}
+ndir("fig2_res")
+log_c = read_rds("log_c.rds")
+res = fread("res.csv")
+trl = read_rds("trl.rds")
+```
+
+
+```{r}
+ndir("fig4_res")
+#x = intersect(rownames(MethylSig), rownames(B))
+#mr = MethylResolver(methylMix = B[x,], methylSig = MethylSig[x,], betaPrime = FALSE)
+mr = as.data.frame(fread("MethylResolver.txt"))
+mr
+```
+
+```{r}
+'ndir("fig1_res")
+load(file = "RedGreen_methylation_set.Rdata")
+
+ppci = preprocessIllumina(mset)
+
+data(exclude_regions)
+data(detail_regions)
+
+detail_regions
+
+mart = useMart(biomart = "ENSEMBL_MART_ENSEMBL", host="grch37.ensembl.org")
+ensembl = useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", GRCh = 37)
+
+trl = getBM(attributes=c("hgnc_symbol", "entrezgene_id" ,"gene_biotype", "start_position", "end_position", "chromosome_name", "strand"), mart= ensembl)
+
+trl
+
+detail_regions = "x"
+l = ls()'
+```
+
+
+```{r}
+'ndir("fig5_res")
+
+anno =CNV.create_anno(array_type = "EPIC")
+
+detail_regions.gene = trl[match(c("STAT3", "SMARCB1", "T", "LYST", "BLM", "CDKN2A", "TP53", "RB1", "PTEN", "KRAS", "PTCH1", "MYC", "MCL1", "BAGE2", "NDRG1"), trl$hgnc_symbol),]
+
+detail_regions.gene = makeGRangesFromDataFrame(data.frame(chr = paste0("chr", detail_regions.gene$chromosome_name),
+                                                          start = detail_regions.gene$start_position,
+                                                          end = detail_regions.gene$end_position,
+                                                          strand = ifelse(detail_regions.gene$strand == 1, "+", ifelse(detail_regions.gene$strand == (-1), "-", "*")),
+                                                          name = detail_regions.gene$hgnc_symbol,
+                                                          score = 0), keep.extra.columns = T)
+
+detail_regions = detail_regions.gene
+
+
+detail_regions.promoter = flank(detail_regions.gene, width = 2000)
+detail_regions = punion(detail_regions, detail_regions.promoter)
+values(detail_regions)$name = values(detail_regions.gene)$name
+values(detail_regions)$thick = resize(ranges(detail_regions), 1E6,fix = "center")
+score(detail_regions) = countOverlaps(detail_regions, anno@probes)
+values(detail_regions)$probes_gene = countOverlaps(detail_regions.gene, anno@probes)
+values(detail_regions)$probes_promoter = countOverlaps(detail_regions.promoter, anno@probes)
+save(detail_regions, file = "my_detail_regions.rds")
+
+detail_regions
+
+rm(list = setdiff(ls(), l))
+
+anno =CNV.create_anno(array_type = "EPIC", chrXY = T, exclude_regions = exclude_regions, detail_regions = detail_regions)'
+```
+
+
+
+
+
+```{r}
+'cnv.data = CNV.load(ppci)
+
+wd = getwd()
+conumee.res = list()
+for(el in sampleNames(ppci)[ppci$type == "chordoma"]){
+  x = CNV.fit(query = cnv.data[el], ref = cnv.data[sampleNames(ppci)[ppci$type == "nucleus_pulposus"]], anno = anno)
+  x = CNV.segment(CNV.detail(CNV.bin(x)))
+  
+  setwd(paste0(wd, "/fig5_res/conumee/samples_general"))
+  png(file=gsub("/", "_", paste0("conumee_general_plot_", spl[spl$file == el,"sample"], ".png")), width = 12, height = 6, units = "in", res = 400)
+  CNV.genomeplot(x, chrX = F, chrY = F, detail = F, cols = c("red4", "orange", "lightgrey", "cyan", "blue4"), main = spl[spl$file == el,"sample"])
+  dev.off()
+  
+  setwd(paste0(wd, "/fig5_res/conumee/samples_regional"))
+  png(file=gsub("/", "_", paste0("conumee_regional_plot_", spl[spl$file == el,"sample"], ".png")), width = 15, height = 6, units = "in", res = 400)
+  CNV.detailplot_wrap(x, cols = c("red4", "orange", "lightgrey", "cyan", "blue4"), main = spl[spl$file == el,"sample"])
+  dev.off()
+  
+  conumee.res[[spl[spl$file == el,"Sample_Name"]]] = x
+  
+  print(el)
+}
+setwd(paste0(wd, "/fig5_res"))
+save(conumee.res, file = "conumee_res.Rdata")'
+```
+
+
+
+```{r}
+ndir("fig5_res")
+load("conumee_res.Rdata")
+```
+
+```{r}
+cols = setNames(c("deepskyblue", RColorBrewer::brewer.pal(5, "Set2")), c("chordoma_gen", "chordoma_C", "nucleus_pulposus", "chordoma_I", "chordoma_2", "chordoma_1"))
+```
+
+
+
+
+```{r}
+#df = NULL
+df2 = NULL
+for(el in intersect(spl$sample, names(conumee.res))){
+  x = conumee.res[[el]]@seg$summary
+  x$sample = el
+  x$seqnames = x$chrom
+  df2 = rbind(df2, x)
+}
+
+df2 %>% filter(abs(seg.mean) > 0.3)
+
+df2$type = spl$type[match(df2$sample, spl$sample)]
+spl$cnvs = table((df2 %>% filter(abs(seg.mean)>0.3))$sample)[spl$sample]
+spl$cnvs[is.na(spl$cnvs)] = 0
+
+wilcox.test(cnvs~type, data = spl %>% filter(source == "chordoma"))
+
+df2 = df2 %>%
+  mutate(type = spl$type[match(sample, spl$sample)]) %>%
+  filter(type %in% c("chordoma_I", "chordoma_C")) %>%
+  filter(chrom %in% paste0("chr", 1:22)) %>%
+  mutate(chrom = factor(as.character(chrom), levels = paste0("chr", 1:22)),
+         sample = factor(as.character(sample), levels = intersect(clust$labels[clust$order], df2$sample)))
+
+df2
+
+df = df2
+df = df[1:22,]
+df$chrom = factor(paste0("chr", 1:22),levels = paste0("chr", 1:22))
+df$seg.mean = 0
+df$loc.start = 0
+df$loc.end = sapply(df$chrom, function(el){
+  max((trl %>% filter(chromosome_name == gsub("chr", "", el)))$end_position)
+})
+df2 = rbind(df2, df)
+```
+
+```{r}
+ndir("fig5_res")
+fwrite(as.data.frame(df2 %>% arrange(-abs(seg.mean)) %>% mutate(threshold = ifelse(abs(seg.mean)< 0.3, "ns", ifelse(seg.mean >0, "gain", "loss"))) %>% select(sample, chrom, loc.start, loc.end, seg.mean, seg.sd, seg.median, seg.mad, num.mark, threshold)), row.names = F, quote = F, file = "conumee_supp.tsv", sep = "\t")
+
+```
+
+```{r}
+f = function(el) {(el - min(el))/(max(el)-min(el))}
+
+p = ggplot() +
+  geom_point(data = df2, aes(x = loc.start, y = sample), color = "transparent") +
+  geom_point(data = df2, aes(x = loc.end, y = sample), color = "transparent") +
+  geom_point(data = df2 %>% filter(abs(seg.mean) > 0.3), aes(x = loc.start, y = sample, color = seg.mean), size = 0.75) +
+  geom_point(data = df2 %>% filter(abs(seg.mean) > 0.3), aes(x = loc.end, y = sample, color = seg.mean), size = 0.75) +
+  geom_segment(data = df2 %>% filter(abs(seg.mean) > 0.3), aes(x = loc.start, xend = loc.end, y = sample, yend = sample, color = seg.mean), size = 1) +
+  scale_color_gradientn(name = expression("val."), colours = c("deeppink", "darkorchid", "gray20", "aquamarine3", "chartreuse"), limits = c(-1,1) * max(abs(df2$seg.mean)), values = f(c(-max(abs(df2$seg.mean)), -1, -0.3, 0, 0.3, 1,  max(abs(df2$seg.mean))))) +
+  theme_bw() + facet_grid(~chrom, scales = "free_x", space = "free_x") +
+  labs(title = "conumee estimate of Copy Number Alterations") +
+  theme(legend.position = "right", axis.title.x = element_blank(), plot.title = element_text(hjust = 0.5),axis.ticks.x = element_blank(), axis.text.x = element_blank(), panel.grid = element_blank(), axis.text.y = element_text(face = "bold", color = cols[spl$type[match(levels(df2$sample), spl$sample)]])) 
+
+ndir("fig5_res")
+ggsave(p, filename = "fig5a.png", width = 210, height = 0.3*297, scale = 1.7, units = "mm", dpi = 400)
+saveRDS(p, file= "fig5a.rds")
+```
+
+```{r}
+df = NULL
+df2 = NULL
+for(el in intersect(spl$sample, names(conumee.res))){
+  x = as.data.frame(conumee.res[[el]]@anno@bins)
+  x$ratio = conumee.res[[el]]@bin$ratio[rownames(x)]
+  x$sample = el
+  df = rbind(df, x)
+  x = conumee.res[[el]]@seg$summary
+  x$sample = el
+  x$seqnames = x$chrom
+  df2 = rbind(df2, x)
+}
+
+df$shape = ifelse(df$ratio > 2, "higher", ifelse(df$ratio < (-2), "lower", "normal"))
+df$ratio = ifelse(df$ratio > 2, 2, ifelse(df$ratio < (-2), (-2), df$ratio))
+df2$seg.mean = ifelse(df2$seg.mean > 2, 2, ifelse(df2$seg.mean < (-2), (-2), df2$seg.mean))
+```
+
+```{r}
+trl %>% mutate(seqnames = paste0("chr", chromosome_name))
+```
+
+
+```{r}
+
+x = c("50_19", "4_19", "53_18", "26_16", "54_15", "39_18")
+
+ndir("fig5_res")
+df = df %>%filter(sample %in% x) %>% mutate(seqnames = factor(seqnames, levels = paste0("chr", c(1:22, "X", "Y", " "))), sample = factor(sample, levels = rev(clust$labels[clust$order]))) %>% filter(seqnames %in% paste0("chr", c(1:22)))
+df2 = df2 %>% filter(sample %in% x) %>% mutate(seqnames = factor(seqnames, levels = paste0("chr", c(1:22, "X", "Y", " "))), sample = factor(sample, levels = rev(clust$labels[clust$order])))%>% filter(sample %in% x) %>% filter(seqnames %in% paste0("chr", c(1:22)))
+
+df2$type = gsub("chordoma_", "chord. ", spl$type[match(df2$sample, spl$sample)])
+df$type = gsub("chordoma_", "chord. ", spl$type[match(df$sample, spl$sample)])
+
+df3 = data.frame(sample = x, seqnames = " ", x = (1:6)*1e7) %>% mutate(seqnames = factor(seqnames, levels = c(" ", paste0("chr", c(1:22, "X", "Y")))), sample = factor(sample, levels = rev(clust$labels[clust$order]))) %>% mutate(type = spl$type[match(sample, spl$sample)])
+df4 = trl %>% mutate(seqnames = paste0("chr", chromosome_name)) %>% filter(chromosome_name %in% 1:22) %>% select(start_position, end_position, seqnames) %>% group_by(seqnames) %>% summarise(len = max(end_position)) %>% mutate(sample = x[1]) %>% mutate(seqnames = factor(seqnames, levels = paste0("chr", c(1:22, "X", "Y", " "))), sample = factor(sample, levels = rev(clust$labels[clust$order])))
+
+f = function(el) {(el - min(el))/(max(el)-min(el))}
+el = "39/18"
+p = ggplot() +
+  geom_point(data = df %>% filter(sample %in% x), aes(x = midpoint, y = ratio, fill = ratio, shape = shape), color = "00FFFFFF") +
+  scale_fill_gradientn(colours = c("deeppink", "darkorchid", "gray", "aquamarine3", "chartreuse"), limits = c(-1,1) * max(abs(df$ratio)), values = f(c(-max(abs(df$ratio)), -1, -0.5, 0, 0.5, 1,  max(abs(df$ratio))))) +
+  scale_shape_manual(breaks = c("normal", "lower", "higher"), values = c(21, 25, 24)) +
+  geom_point(data = df2%>% filter(sample %in% x), aes(x = loc.start, y = seg.mean), color = "blue", size = 0.75) +
+  geom_point(data = df2%>% filter(sample %in% x), aes(x = loc.end, y = seg.mean), color = "blue", size = 0.75) +
+  geom_segment(data = df2%>% filter(sample %in% x), aes(x = loc.start, xend = loc.end, y = seg.mean, yend = seg.mean), color = "blue", size = 1) +
+  new_scale_fill() +
+  ggtext::geom_richtext(data = df3, aes(x = 3.5e7, y = 0, fill = type, label = gsub("chordoma_", "chordoma ", type)), angle = 270, size = 3.35) +
+  scale_fill_manual(values = cols) +
+  geom_point(data = df3, aes(x = x, y = 0), color = "transparent") +
+  geom_point(data = df4, aes(x = len, y = 0), color = "transparent") +
+  geom_point(data = df4, aes(x = 0, y = 0), color = "transparent") +
+  scale_y_continuous(limits = c(-1.05,1.05) * max(abs(df$ratio)), breaks = ((-2):2), name = "CNV ratio") +
+  facet_grid(sample~seqnames, scales = "free_x", space = "free_x") +
+  theme_bw() + theme(legend.position = "none", axis.title.x = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank(), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank())
+
+ggsave(p, filename = "selected.png", width = 210, height = 0.3*297, scale = 1.7, units = "mm", dpi = 400)
+```
+
+
+
+
+```{r}
+spl$cdkn_num = sapply(conumee.res, function(el){el@detail$ratio["CDKN2A"]})[paste0(spl$sample, ".CDKN2A")]
+```
+
+```{r}
+set.seed(1995)
+p = spl %>% mutate(x = factor(gsub("_", " ", type), levels = c("nucleus pulposus", "chordoma I", "chordoma C"))) %>% filter(!is.na(cdkn_num))
+
+p = ggplot() +
+  geom_jitter(data = p, aes(x = x, y = cdkn_num, fill = type), pch = 21, color = "transparent", width = 0.3, height = 0, alpha = 0.5) +
+  geom_boxplot(data = p, aes(x = x, y = cdkn_num, color = type), fill = "transparent", outlier.shape = NA) +
+  scale_fill_manual(values = cols) +
+  scale_color_manual(values = darken(cols, 0.2), breaks = names(cols)) +
+  geom_text(data = data.frame(x = 1.5, y = -2.5, label = sprintf("Mann-Whitney test\np-value: %s", signif(wilcox.test(cdkn_num~type, data = p)$p.value,2))), aes(x = x, y = y, label = label)) +
+  geom_hline(yintercept = -0.3, color = "gray20", lty = 2) +
+  theme_bw() + theme(legend.position = "none", axis.title.x = element_blank(), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank()) + labs(y = "CDKN2A loss, conumee estimate")
+
+ndir("fig5_res")
+ggsave(p, filename = "fig5b.png", width = 210/2, height = 0.2*297, scale = 1.7, units = "mm", dpi = 400)
+saveRDS(p, file= "fig5b.rds")
+```
+```{r}
+fig5b = p
+```
+
+
+```{r}
+library(survival)
+spl = spl %>% mutate(surv = Surv(days, as.numeric(alive == "no")))
+coxph(surv ~ cnvs, data = spl)
+
+#install.packages("maxstat")
+library(maxstat)
+library(survminer)
+
+ maxstat.test(surv ~ cnvs, data=spl, smethod="LogRank", pmethod="HL")
+```
+
+
+```{r}
+library(ggfortify)
+p = survfit(surv ~ cnv_cat, data = spl %>% mutate(cnv_cat = ifelse(cnvs>8, "high", "low")), conf.int = 0.8)
+p = autoplot(p, conf.int = F, censor.colour = 'black') + theme_bw() + theme(panel.grid.minor = element_blank()) + scale_x_continuous(limits = c(0, 1.05*max(spl$days, na.rm = T)), expand = c(0,0), breaks = round(365.25*1:floor(max(spl$days, na.rm = T)/365.25)), name = "Time [days]") + scale_y_continuous(limits = c(0, 1.05), expand = c(0,0), name = "Survival probability", breaks = 0:4/4, labels = paste0(100*(0:4)/4, "%")) + scale_color_manual(name = "CNVs", values = setNames(RColorBrewer::brewer.pal(5, "BuPu")[c(5,2)] , c("high", "low")), labels = c("> 8", "≤ 8")) + geom_text(data = data.frame(x = 0.8*max(spl$days, na.rm = T), y = 0.375, label = sprintf("Cox test p-value: %s", signif(summary(coxph(surv ~ cnvs, data = spl))$coefficients[5],2))), aes(x = x, y = y, label = label))
+ndir("fig5_res")
+ggsave(p, filename = "fig5c.png", width = 210/2, height = 0.2*297, scale = 1.7, units = "mm", dpi = 400)
+saveRDS(p, file= "fig5c.rds")
+```
+
+
+```{r}
+bnds = setDT(msigdbr(species = "Homo sapiens", category = "C1"))
+
+X = log_c
+#cv2 = scran::modelGeneCV2(log_c)
+#X = log_c[cv2[rownames(log_c),"FDR"] < 0.1,]
+
+
+
+X = t(scale(t(X)))
+#X = log_c
+
+a = bnds[ensembl_gene %in% rownames(X)]
+
+a = xtabs(~gs_name+ensembl_gene,a)
+
+gsealm_bnds = GSNormalize(dataset = X[colnames(a),], incidence = a, removeShift = TRUE)
+
+library(limma)
+
+x = gsealm_bnds[,colnames(gsealm_bnds) %in% (spl$sample[spl$source == "chordoma"])]
+
+
+design = as.matrix(data.frame(row.names = colnames(x),
+                              Ch1 = ifelse(spl$type[match(colnames(x), spl$sample)] == "chordoma_I", 1, 0),
+                              Ch2 = ifelse(spl$type[match(colnames(x), spl$sample)] == "chordoma_C", 1, 0)))
+
+fit = limma::lmFit(x, design = design)
+cont.matrix <- makeContrasts(Ch1vsCh2=Ch1-Ch2, levels=design)
+fit <- contrasts.fit(fit, cont.matrix)
+y = eBayes(fit)
+
+y = topTable(y, number = dim(x)[1])
+
+y
+```
+```{r}
+f = function(x){(x - min(x))/(max(x) - min(x))}
+
+p = as.data.frame(gsealm_bnds) %>% rownames_to_column("band") %>% filter(grepl("chr9", band)) %>% 
+  pivot_longer(cols = colnames(gsealm_bnds), values_to = "val", names_to = "sample") %>%
+  mutate(chr = tstrsplit(tstrsplit(band, "p")[[1]], "q")[[1]]) %>% mutate(chr = factor(chr, levels = unique(c(paste0("chr", c(1:22, "X", "Y")), chr)))) %>%
+  mutate(numbd = 100*as.numeric(gsub("X", "23",gsub("Y", "24",gsub("chr", "", chr)))) + ifelse(grepl("q", band), as.numeric(tstrsplit(band, "q")[[2]]), -as.numeric(tstrsplit(band, "p")[[2]]))) %>% 
+  mutate(band = factor(band, levels = unique((x %>% arrange(numbd))$band)))
+
+p = p %>%  mutate(sample = factor(as.character(sample), levels = intersect(gsub("NP1", "NP7", clust$labels[clust$order]), p$sample)))
+spl$type[spl$sample == "NP7"] = "nucleus_pulposus"
+spl = spl %>%  mutate(sample = factor(as.character(sample), levels = intersect(gsub("NP1", "NP7", clust$labels[clust$order]), p$sample)))
+
+p = ggplot() + 
+  #geom_text(data = spl %>% filter(sample %in% p$sample), aes(x = " ", y = sample, label = sample, color = type)) +
+  geom_tile(data = p, aes(x = band, y = sample, fill = val)) +
+  scale_x_discrete(name = "chromosomal band") +
+  scale_color_manual(values = cols, guide = guide_none()) +
+  scale_fill_gradientn(limits = range(p$val), f(unname(quantile(p$val, (0:10)/10))), colors = RColorBrewer::brewer.pal(11, "Spectral"), name = expression("val."), breaks = c(ceiling(min(p$val)), round(min(p$val)/2), 0, round(max(p$val)/2), floor(max(p$val)))) +
+  theme_minimal() +
+  labs(title = "GSEAlm normalization of expression across chromosomal bands") +
+  theme(legend.position = "right", plot.title = element_text(hjust = 0.5), legend.margin = margin(0,0,0,0), panel.grid = element_blank(), axis.text.y = element_text(face = "bold", color = cols[spl$type[match(levels(p$sample), spl$sample)]]) , axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1), plot.background = element_rect(fill = "white", color = "white"))
+
+ndir("fig5_res")
+ggsave(p, filename = "fig5d.png", width = 210, height = 0.3*297, scale = 1.7, units = "mm", dpi = 400)
+saveRDS(p, file= "fig5d.rds")
+```
+
+```{r}
+f = function(x){(x - min(x))/(max(x) - min(x))}
+
+p = as.data.frame(gsealm_bnds) %>%
+  rownames_to_column("band") %>%
+  pivot_longer(cols = colnames(gsealm_bnds), values_to = "val", names_to = "sample") %>%
+  mutate(chr = tstrsplit(tstrsplit(band, "p")[[1]], "q")[[1]]) %>% mutate(chr = factor(chr, levels = unique(c(paste0("chr", c(1:22, "X", "Y")), chr)))) %>%
+  mutate(numbd = 100*as.numeric(gsub("X", "23",gsub("Y", "24",gsub("chr", "", chr)))) + ifelse(grepl("q", band), as.numeric(tstrsplit(band, "q")[[2]]), -as.numeric(tstrsplit(band, "p")[[2]]))) %>% 
+  mutate(band = factor(band, levels = rev(unique((x %>% arrange(numbd))$band))))
+
+p = p %>%  mutate(sample = factor(as.character(sample), levels = intersect(gsub("NP1", "NP7", clust$labels[clust$order]), p$sample)))
+spl$type[spl$sample == "NP7"] = "nucleus_pulposus"
+spl = spl %>%  mutate(sample = factor(as.character(sample), levels = intersect(gsub("NP1", "NP7", clust$labels[clust$order]), p$sample)))
+
+p = ggplot() + 
+  #geom_text(data = spl %>% filter(sample %in% p$sample), aes(x = " ", y = sample, label = sample, color = type)) +
+  geom_tile(data = p, aes(y = band, x = sample, fill = val)) +
+  scale_y_discrete(name = "chromosomal band") +
+  scale_color_manual(values = cols, guide = guide_none()) +
+  scale_fill_gradientn(values = f(unname(quantile(p$val, (0:5)/5))), colors = RColorBrewer::brewer.pal(6, "Spectral"), name = expression("val."), breaks = c(ceiling(min(p$val)), round(min(p$val)/2), 0, round(max(p$val)/2), floor(max(p$val)))) +
+  theme_minimal() +
+  labs(title = "GSEAlm normalization of expression across chromosomal bands") +
+  theme(legend.position = "right", plot.title = element_text(hjust = 0.5), legend.margin = margin(0,0,0,0), panel.grid = element_blank(), axis.text.x = element_text(face = "bold", color = cols[spl$type[match(levels(p$sample), spl$sample)]], angle = 90, vjust = 0.5, hjust = 1), plot.background = element_rect(fill = "white", color = "white")) +
+  facet_grid(chr~., scales = "free", space = "free")
+
+ndir("fig5_res")
+ggsave(p, filename = "sup_fig3.png", width = 150, height = 450, scale = 1.5, units = "mm", dpi = 400)
+ggsave(p, filename = "sup_fig3.pdf", width = 150, height = 450, scale = 1.5, units = "mm", dpi = 400)
+#saveRDS(p, file= "fig5d.rds")
+```
+
+```{r}
+ndir("fig5_res")
+fwrite(as.data.frame(y) %>% rownames_to_column("band"), row.names = F, quote = F, file = "GSEALM_supp.tsv", sep = "\t")
+
+```
+
+
+```{r}
+bnds %>% filter(gs_name == "chr9p21")
+```
+
+
+
+```{r}
+set.seed(1995)
+p = data.frame(val = gsealm_bnds["chr9p21",], sample = colnames(gsealm_bnds)) %>% mutate(type = factor(spl$type[match(sample, spl$sample)], levels = c("nucleus_pulposus", "chordoma_I", "chordoma_C"))) %>% mutate(x = factor(gsub("_", " ", type), levels = c("nucleus pulposus", "chordoma I", "chordoma C")))
+p = ggplot() +
+  geom_jitter(data = p, aes(x = x, y = val, fill = type), pch = 21, color = "transparent", width = 0.3, height = 0, alpha = 0.5) +
+  geom_boxplot(data = p, aes(x = x, y = val, color = type), fill = "transparent") +
+  scale_fill_manual(values = cols) +
+  scale_color_manual(values = darken(cols, 0.2), breaks = names(cols)) +
+  geom_text(data = data.frame(x = 2, y = -7.5, label = sprintf("Mann-Whitney test\np-value: %s", signif(wilcox.test(val~type, data = p %>% filter(!type == "nucleus_pulposus"))$p.value,2))), aes(x = x, y = y, label = label)) +
+  theme_bw() + theme(legend.position = "none", axis.title.x = element_blank(), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank()) + labs(y = "chr9p21 GSEAlm normalization")
+
+ndir("fig5_res")
+ggsave(p, filename = "fig5e.png", width = 210/2, height = 0.2*297, scale = 1.7, units = "mm", dpi = 400)
+saveRDS(p, file= "fig5e.rds")
+```
+
+```{r}
+set.seed(1995)
+p = data.frame(val = log_c["ENSG00000147889",], sample = colnames(log_c)) %>% mutate(type = factor(spl$type[match(sample, spl$sample)], levels = c("nucleus_pulposus", "chordoma_I", "chordoma_C"))) %>% mutate(x = factor(gsub("_", " ", type), levels = c("nucleus pulposus", "chordoma I", "chordoma C")))
+p = ggplot() +
+  geom_jitter(data = p, aes(x = x, y = val, fill = type), pch = 21, color = "transparent", width = 0.3, height = 0, alpha = 0.5) +
+  geom_boxplot(data = p, aes(x = x, y = val, color = type), fill = "transparent", outlier.shape = NA) +
+  scale_fill_manual(values = cols) +
+  scale_color_manual(values = darken(cols, 0.2), breaks = names(cols)) + 
+  geom_text(data = data.frame(x = 2, y = 3, label = sprintf("p-value: %s\nadj. p-val.: %s", signif(res$pvalue_CI_CC[res$ensembl_gene_id == "ENSG00000147889"],2), signif(res$padj_CI_CC[res$ensembl_gene_id == "ENSG00000147889"],2))), aes(x = x, y = y, label = label)) +
+  scale_y_continuous(limits = c(0,1.05*p$val), expand = c(0,0), name = "CDKN2A, DESeq2-normalized expression level") + theme_bw() + theme(legend.position = "none", axis.title.x = element_blank(), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank())
+
+ndir("fig5_res")
+ggsave(p, filename = "fig5f.png", width = 210/2, height = 0.2*297, scale = 1.7, units = "mm", dpi = 400)
+saveRDS(p, file= "fig5f.rds")
+```
+
+```{r}
+set.seed(1995)
+p = data.frame(val = gsealm_bnds["chr9p21",], sample = colnames(gsealm_bnds)) %>% mutate(type = factor(spl$type[match(sample, spl$sample)], levels = c("nucleus_pulposus", "chordoma_I", "chordoma_C"))) %>% mutate(x = factor(gsub("_", " ", type), levels = c("nucleus pulposus", "chordoma I", "chordoma C")))
+p = ggplot() +
+  geom_jitter(data = p, aes(x = x, y = val, fill = type), pch = 21, color = "transparent", width = 0.3, height = 0, alpha = 0.5) +
+  geom_boxplot(data = p, aes(x = x, y = val, color = type), fill = "transparent") +
+  scale_fill_manual(values = cols) +
+  scale_color_manual(values = darken(cols, 0.2), breaks = names(cols)) +
+  geom_text(data = data.frame(x = 2, y = -7.5, label = sprintf("Mann-Whitney test\np-value: %s", signif(wilcox.test(val~type, data = p %>% filter(!type == "nucleus_pulposus"))$p.value,2))), aes(x = x, y = y, label = label)) +
+  theme_bw() + theme(legend.position = "none", axis.title.x = element_blank(), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank()) + labs(y = "chr9p21 GSEAlm normalization")
+```
+
+```{r}
+getwd()
+```
+
+
+
+```{r}
+library(png)
+ndir("fig5_res")
+list.files()
+fig5a = read_rds("fig5a.rds")
+fig5b = read_rds("fig5b.rds")
+fig5f = read_rds("fig5c.rds")
+fig5c = read_rds("fig5d.rds")
+fig5d = read_rds("fig5e.rds")
+fig5e = read_rds("fig5f.rds")
+```
+
+```{r}
+ggsave(ggarrange(fig5a,
+            ggarrange(fig5b, fig5c, widths = c(2,8), labels = c("b", "c")),
+            ggarrange(fig5d, fig5e, fig5f, widths = c(3,3,4), labels = c("d", "e", "f"), nrow = 1, ncol = 3),
+            nrow = 3, ncol = 1, labels = c("a", "", ""), heights = c(3,2.5,2.5)),
+       filename = "figure5.png", width = 210, height = 0.8*297, units = "mm", dpi = 400, scale = 1.8)
+```
+```{r}
+ggsave(ggarrange(fig5a,
+            ggarrange(fig5b, fig5c, widths = c(2,8), labels = c("b", "c")),
+            ggarrange(fig5d, fig5e, fig5f, widths = c(3,3,4), labels = c("d", "e", "f"), nrow = 1, ncol = 3),
+            nrow = 3, ncol = 1, labels = c("a", "", ""), heights = c(3,2.5,2.5)),
+       filename = "figure5.pdf", width = 210, height = 0.8*297, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+```{r}
+ggsave(ggarrange(fig5a, ggarrange(fig5b, fig5c, labels = c("b", "c")), fig5d, ggarrange(fig5e, fig5f, labels = c("e", "f")), labels = c("a","", "d", ""), nrow = 4, ncol = 1, heights = c(3,2,3,2)) + theme(plot.background = element_rect(fill = "white", color = "white")), filename = "Figure5.png", width = 210, height = 297, scale = 1.7, units = "mm", dpi = 400)
+```
+```{r}
+spl = spl %>% left_join(mr %>% mutate(sample = V1) %>% select(Purity, sample), by = "sample")
+```
+
+
+```{r}
+x = spl %>%
+  filter(source == "chordoma") %>% 
+  select(type, sex, age, cnvs, surv, Purity)
+
+coxph(surv~., data = x)
+```
+
+```{r}
+coxph(surv~cnvs, data = x)
+```
+
+
+```{r}
+lapply(c("type", "sex", "age", "cnvs", "surv", "Purity"), function(el){
+  coxph(as.formula(sprintf("surv~%s", el)), data = x)
+})
+```
+```{r}
+wilcox.test(Purity~type, data = spl)
+```
+
+
+
+```{r}
+library(survminer)
+library(survival)
+coxph(surv ~ Purity, data = spl %>% filter(source == "chordoma"))
+
+```
+

@@ -1,0 +1,773 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+ndir = function(ndir){
+  if(!dir.exists(ndir)){
+    dir.create(ndir, recursive = TRUE)
+  }
+  setwd(ndir)
+}
+
+dropNA = function(el){el[!is.na(el)]}
+
+pckgs = c("tidyverse", "readxl", "ggnewscale",  "ggrepel", "RColorBrewer", "mclust", "survival", "survminer", "data.table", "dplyr", "tidyr", "ggplot2", "ggdendro", "ggnewscale", "minfi", "IlluminaHumanMethylationEPICanno.ilm10b4.hg19", "colorspace", "preprocessCore")
+x = setdiff(pckgs, installed.packages())
+if(length(x>0)){
+  install.packages(x)
+}
+x = setdiff(pckgs, installed.packages())
+if(length(x>0)){
+  BiocManager::install(x, ask = F, update = T)
+}
+gh = c("traversc/trqwe")
+x = setdiff(names(gh), installed.packages())
+if(length(x>0)){
+  for(el in x){
+    devtools::install_github(gh[el])
+}}
+sapply(c(pckgs, names(gh)), library, character.only = T)
+```
+
+
+
+```{r}
+ndir(file.path("supl", "raw"))
+#system("wget https://ftp.ncbi.nlm.nih.gov/geo/series/GSE205nnn/GSE205331/suppl/GSE205331_RAW.tar")
+#system("tar -xvf GSE205331_RAW.tar")
+```
+
+```{r}
+ndir(file.path("supl", "raw"))
+pd = fread("Data Sheet 1.CSV")
+pd
+```
+```{r}
+ndir(file.path("supl", "raw"))
+x = list.files()
+pd$prefix = sapply(pd$ID, function(el){
+  unique(gsub("_Grn.idat.gz", "", gsub("_Red.idat.gz", "", x[grepl(el, x)])))
+})
+```
+
+```{r}
+ndir(file.path("supl", "raw"))
+mf = minfi::read.metharray(pd$prefix)
+```
+
+```{r}
+library(ConsensusClusterPlus)
+```
+
+
+```{r}
+beta = getBeta(mf)
+beta = beta[rowSums(is.na(beta)) == 0,]
+
+mads=apply(beta,1,mad)
+d=beta[rev(order(mads))[1:10000],]
+d = sweep(d,1, apply(d,1,median,na.rm=T))
+res = ConsensusClusterPlus(d)
+```
+
+```{r}
+pd$cluster = (res[[2]]$consensusClass)[as.character(pd$prefix)]
+```
+
+
+```{r}
+pd$fc = pd$cluster
+pd$fc[pd$ID == "3999997120_R03C02"] = 1 
+pd$fc[pd$ID == "3999442049_R02C01"] = 2
+```
+
+
+
+
+```{r}
+xtabs(~Gender + fc, data = pd)
+xtabs(~surgery + fc, data = pd)
+xtabs(~Radiotherapy + fc, data = pd)
+xtabs(~Recurrence + fc, data = pd)
+```
+
+
+```{r}
+mean(pd$Age[pd$fc == 2])
+mean(pd$DFS[pd$fc == 2])
+```
+
+
+```{r}
+library(ggfortify)
+pd = data.frame(pd)
+pd$surv = Surv(pd$DFS, pd$Recurrence == "Yes")
+p = survfit(surv ~ fc, data = pd)
+p = autoplot(p, conf.int = F, censor.colour = 'black') + theme_bw() + theme(panel.grid.minor = element_blank())
+p
+```
+```{r}
+ndir("supl")
+fwrite(pd %>% select(-surv), file = "Huo_pd_with_clust.csv")
+```
+
+
+
+```{r}
+ndir("fig1_res")
+nset = read_rds("nset.rds")
+```
+
+
+
+
+
+
+
+```{r}
+anno = getAnnotation(nset)
+anno = as.data.frame(anno)
+```
+
+
+
+
+```{r}
+ndir("fig1_res")
+
+load("beta_and_M.Rdata")
+```
+
+```{r}
+ndir("fig1_res")
+spl = read.csv(file = "spl_clust.csv")
+```
+
+```{r}
+cbb = intersect(rownames(B), names(mads)[rev(order(mads))[1:10000]])
+cbb = cbind(beta[cbb,], B[cbb,])
+cbb = cbb[,!grepl("NP", colnames(cbb))]
+
+
+d=cbb
+d = sweep(d,1, apply(d,1,median,na.rm=T))
+res_cbb = ConsensusClusterPlus(d, maxK = 6)
+```
+
+
+```{r}
+cspl = rbind(
+  spl %>% select("sex", "age", "type", "sample", "file", "days", "alive"),
+  pd %>% dplyr::rename(sex = "Gender", age = "Age", type = "fc", sample = "prefix", days = "OS", alive = "status") %>% mutate(file = sample, days = days*365.25/12) %>% select("sex", "age", "type", "sample", "file", "days", "alive") %>% mutate(type = paste0("chordoma_", type)))
+cspl
+```
+
+
+
+
+
+
+
+```{r}
+cspl$cbb = res_cbb[[2]]$consensusClass[cspl$sample]
+```
+
+```{r}
+xtabs(~cbb+type, data = cspl)
+```
+
+```{r}
+spl = spl %>% mutate(cbb = cspl$cbb[match(sample, cspl$sample)]) %>% mutate(surv = Surv(days, as.numeric(alive == "no")))
+coxph(surv~cbb, data = spl)
+```
+
+
+
+
+
+
+
+
+```{r}
+el = 1 #percent of variable probes
+
+dim(M)
+Mfrac = M[B_sd[rownames(M)] > 0.1,] #selecting for higher beta variation
+dim(Mfrac)
+Mfrac = Mfrac[anno$chr[match(rownames(Mfrac), rownames(anno))] %in% paste0("chr", 1:22),] # selecting autosomes
+dim(Mfrac)
+Mfrac = Mfrac[1:round(dim(Mfrac)[1]*el/100),] #as M is sorted by variance this selects el% most variable probes
+dim(Mfrac)
+
+#scaling
+Mfrac[Mfrac == Inf] = max(Mfrac[!Mfrac == Inf]) +1
+Mfrac[Mfrac == -Inf] = min(Mfrac[!Mfrac == -Inf]) -1
+Mfrac = scale(t(Mfrac))
+```
+
+```{r}
+detP = detectionP(mf)
+failed = detP>0.01
+failed = rownames(failed[rowMeans(failed)>0.25,]) # How many positions failed in >25% of samples?
+length(failed)
+
+nmf = preprocessFunnorm(mf)
+dim(nmf)
+nmf = nmf[setdiff(rownames(nmf), failed),]
+dim(nmf)
+nmf = addSnpInfo(nmf)
+nmf = dropLociWithSnps(nmf, snps=c("SBE","CpG"), maf=0)
+dim(nmf)
+```
+
+
+```{r}
+ndir("supl")
+trqwe::mcsaveRDS(nmf, "Huo_norm.rds")
+```
+
+
+
+```{r}
+bal_pb = colnames(Mfrac)
+huo_pb = names(mads[order(mads, decreasing = TRUE)][1:10000])
+```
+
+
+
+
+```{r}
+ov = unique(c(bal_pb, huo_pb))
+length(ov)
+ov = intersect(ov, rownames(nmf))
+ov = intersect(ov, rownames(nset))
+length(ov)
+```
+
+
+
+
+
+
+
+```{r}
+consM = t(cbind(getM(nmf)[ov,], getM(nset)[ov,]))
+consM[1:10,1:10]
+```
+
+
+
+
+```{r}
+#library(xgboost)
+
+#trainM = consM[(spl %>% filter(type %in% c("chordoma_I", "chordoma_C")))$file,]
+#trainlab = ifelse((spl %>% filter(type %in% c("chordoma_I", "chordoma_C")))$type == "chordoma_I", 1, 0)
+
+#model = xgboost(data = trainM, label = trainlab, nrounds = 12, max.depth = 20, nthread = 96, objective = "binary:logistic")
+
+#pred <- predict(model, consM)
+
+#cspl$pred = pred[match(cspl$file, rownames(consM))]
+#cspl$predt = ifelse(cspl$pred > 0.5, "I", "C")
+#ggplot() +
+#  geom_point(data = cspl, aes(x = type, y = pred), alpha = 0.5) +
+#  theme_bw()
+
+#trainM = consM[pd$prefix,]
+#trainlab = pd$fc
+#trainlab[trainlab == 2] = 0
+
+#model = xgboost(data = trainM, label = trainlab, nrounds = 12, max.depth = 20, nthread = 96, objective = "binary:logistic")
+
+#pred <- predict(model, consM)
+
+#cspl$predHuo = pred[match(cspl$file, rownames(consM))]
+#cspl$predHuot = ifelse(cspl$predHuo > 0.5, "I", "C")
+#ggplot() +
+#  geom_point(data = cspl, aes(x = type, y = predHuo), alpha = 0.5) +
+#  theme_bw()
+```
+
+
+
+```{r}
+X = consM
+```
+
+
+```{r}
+x = hclust(dist(X), method = "ward.D")
+x$labels = cspl$type[match(x$labels, cspl$file)]
+plot(x)
+```
+
+
+
+```{r}
+x = hclust(dist(X), method = "ward.D")
+plot(x)
+library(ggdendro)
+pdf = as.dendrogram(x)
+pdf = dendro_data(pdf, type = "rectangle")
+segment(pdf)
+x = setNames(1:length(x$labels), x$labels[x$order])
+```
+
+```{r}
+y = hclust(dist(t(X)), method = "ward.D")
+y = setNames(1:length(y$labels), y$labels[y$order])
+
+y = 15*y/max(y)
+```
+
+
+
+```{r}
+pn_a.dt = X %>% data.frame() %>% rownames_to_column("spl") %>% pivot_longer(cols = colnames(X), values_to = "M", names_to = "probe") %>% mutate(x = x[spl], y = y[probe])
+pn_a.dt
+```
+
+```{r}
+cols = setNames(RColorBrewer::brewer.pal(3, "Set2"), c("chordoma_C", "nucleus_pulposus", "chordoma_I"))[c("chordoma_I", "chordoma_C",  "nucleus_pulposus")]
+cols['chordoma_1'] = "#2d3389"
+cols['chordoma_2'] = "#e02828"
+cols['metacluster_C'] = "forestgreen"
+cols['metacluster_I'] = "royalblue"
+cols = c(cols, setNames(RColorBrewer::brewer.pal(3, "Set2"), c("Huo_et_al.\nchordoma_C", "Huo_et_al.\nnucleus_pulposus", "Huo_et_al.\nchordoma_I")))
+cols
+```
+
+
+
+
+```{r}
+cspl$x = x[as.character(cspl$file)]
+cspl$mc = ifelse(cspl$x < 19, "metacluster_C", "metacluster_I")
+```
+
+
+```{r}
+f = function(x){(x-min(x))/(max(x)-min(x))}
+pn_a = ggplot() +
+  geom_segment(data = segment(pdf) %>% mutate(y = y/ max(c(y, yend)), yend = yend/ max(c(y, yend))), mapping = aes(x = x, y = 2.5*y + max(pn_a.dt$y) + 2.7, xend = xend, yend = 2.5*yend + max(pn_a.dt$y) + 2.7)) +
+  geom_raster(data = pn_a.dt, aes(x = x, y = y, fill = M)) +
+  scale_fill_gradientn(name = "M-value", colors = c("midnightblue", "blue", "royalblue", "lightsteelblue1", "gray95", "lemonchiffon", "yellow", "gold", "darkorange"), values = unname(f(quantile(pn_a.dt$M, seq(0,1,1/8)))), guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 5)) +
+  new_scale_fill() +
+  geom_tile(data = cspl %>% filter(!is.na(x)), aes(x = x, y = max(pn_a.dt$y) + 1.2, fill = type)) +
+  scale_fill_manual(values = unname(cols), breaks = names(cols), labels = gsub("_", " ", names(cols)), name = "Original\ncluster", guide = guide_legend(order = 2)) +
+  new_scale_fill() +
+  #geom_tile(data = cspl %>% filter(!is.na(x)), aes(x = x, y = max(pn_a.dt$y) + 2.2, fill = pred)) +
+  #scale_fill_gradient2(high = darken(cols["chordoma_I"], 0.2), low = darken(cols["chordoma_C"], 0.2), mid = "white", midpoint = 0.5, name = "Curr. pub.\nxgboost", guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 3)) +
+  #new_scale_fill() +
+  #geom_tile(data = cspl %>% filter(!is.na(x)), aes(x = x, y = max(pn_a.dt$y) + 1.2, fill = predHuo)) +
+  #scale_fill_gradient2(high = darken(cols["chordoma_1"], 0.2), low = darken(cols["chordoma_2"], 0.2), mid = "white", midpoint = 0.5, name = "Huo et al.\nxgboost", guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 4)) +
+  #new_scale_fill() +
+  geom_tile(data = cspl %>% filter(!is.na(x)), aes(x = x, y = max(pn_a.dt$y) + 2.2, fill = mc)) +
+  scale_fill_manual(values = unname(cols), breaks = names(cols), labels = gsub("_", " ", names(cols)), name = "Metacluster", guide = guide_legend(order = 1)) +
+  new_scale_fill() +
+  theme_void() +
+  theme(plot.margin = margin(5,5,5,5))
+  
+pn_a
+```
+```{r}
+
+consB = intersect(rownames(nset), rownames(nmf))
+consB = cbind(getBeta(nmf)[consB,],getBeta(nset)[consB,])
+
+consB[1:10,1:10]
+
+consBsd = apply(consB, 1, sd)
+quantile(consBsd, seq(0, 1, 0.1))
+
+gm = consB[consBsd > 0.1,] %>%
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>%
+  left_join(anno %>% rownames_to_column("probe") %>% dplyr::rename(relation = "Relation_to_Island") %>% select(probe, relation), by = "probe") %>% 
+  pivot_longer(cols = colnames(consB), values_to = "b", names_to = "file") %>% 
+  left_join(cspl, by = "file") 
+
+gm
+
+pn_b.dt = gm
+pn_b.dt = rbind(pn_b.dt, pn_b.dt %>% mutate(relation = "all"))
+
+pn_b.dt = pn_b.dt %>%
+  mutate(type = factor(ifelse(type %in% c("chordoma_1", "chordoma_2"), gsub("metacluster_", "Huo_et_al.\nchordoma_", mc), type), levels = c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C", "chordoma_I", "chordoma_C", "nucleus_pulposus")),
+         relation = factor(gsub("N_", "", gsub("S_", "", relation)), c("all", "Island", "Shore", "Shelf", "OpenSea")))
+```
+
+
+```{r}
+pn_b = ggplot(data = pn_b.dt) + 
+  geom_violin(aes(x = type, y = b, fill = type), color = "transparent") +
+  geom_boxplot(aes(x = type, y = b, color = type), width = 0.3, outlier.shape = NA, fill = "transparent") +
+  scale_color_manual(name = "Sample", values = darken(cols, 0.5), breaks = names(cols), labels = gsub("_", " ", names(cols))) +
+  scale_fill_manual(name = "Sample", values = darken(cols, -0.1), breaks = names(cols), labels = gsub("_", " ", names(cols))) + 
+  facet_grid(~relation) + 
+  theme_bw() +
+  scale_x_discrete(breaks = levels(pn_b.dt$type), labels = gsub("_", " ", levels(pn_b.dt$type))) +
+  scale_y_continuous(limits = c(0,1), expand = c(0,0), name = "β-value") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), axis.title.x = element_blank())
+```
+
+
+```{r}
+ggsave(pn_b, filename = "p1.png", width = 210, height = 0.2*297, units = "mm", dpi = 400, scale = 1.75)
+```
+
+```{r}
+dct = c(
+  "cg01392518" = "TBXT",
+  "cg12044599" = "PTPRCAP",
+  "cg15797102" = ""
+)
+
+dct
+```
+
+
+```{r}
+pl = lapply(c("cg01392518", "cg12044599", "cg15797102"), function(probe){
+  df = consB[probe,]
+  df = data.frame(b = df, file = names(df)) %>% left_join(cspl %>% dplyr::select(file, type, mc)) %>% mutate(type = factor(ifelse(type %in% c("chordoma_1", "chordoma_2"), gsub("metacluster_", "Huo_et_al.\nchordoma_", mc), type), levels = c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C", "chordoma_I", "chordoma_C", "nucleus_pulposus")))
+  
+  df = rbind(df, 
+             df %>% filter(!type == "nucleus_pulposus") %>% mutate(type = mc)) %>% 
+    mutate(x = factor(gsub("_", " ", type), levels = c("Huo et al.\nchordoma I", "Huo et al.\nchordoma C", "chordoma I", "chordoma C", "nucleus pulposus", "metacluster I", "metacluster C")))
+  
+    el = data.frame(
+      x = c(3.5, 1.5, 6.5),
+      y = c(1.1,1.1,1.1),
+      p = c(wilcox.test(b~type, data = df %>% filter(type %in% c("chordoma_I", "chordoma_C")))$p.value,
+            wilcox.test(b~type, data = df %>% filter(type %in% c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C")))$p.value,
+            wilcox.test(b~type, data = df %>% filter(type %in% c("metacluster_C", "metacluster_I")))$p.value)) %>%
+      mutate(lab = ifelse(p < 0.05, sprintf("p = %s", signif(p, 2)), ""))
+    
+    p = ggplot() +
+    geom_jitter(data = df, aes(x = x, y = b, fill = type), pch = 21, color = "transparent", width = 0.2, height = 0) +
+    geom_boxplot(data = df, aes(x = x, y = b, color = type), fill = "transparent", width = 0.8, outlier.shape = NA) +
+    geom_text(data = el, aes(x = x, y = y, label = lab)) + 
+    scale_color_manual(values = darken(cols, 0.1), breaks = names(cols)) +
+    scale_fill_manual(values = lighten(cols, 0.4), breaks = names(cols)) +
+    scale_y_continuous(limits = c(0, 1.2), expand = c(0,0), breaks = (0:4)/4) +
+    labs(title = probe, y = "β-value", subtitle = dct[probe]) +
+    theme_bw() + 
+    theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), plot.subtitle = element_text(hjust = 0.5), plot.title = element_text(hjust = 0.5), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), plot.margin = margin(5,5,5,5))
+
+  return(p)
+})
+
+pl
+```
+
+```{r}
+pn_c = pl[[2]]
+```
+
+```{r}
+pn_sc = pl[[1]]
+```
+
+
+
+```{r}
+library(MethylResolver)
+```
+
+```{r}
+ndir("fig6_res")
+#x = intersect(rownames(MethylSig), rownames(consB))
+#mr = MethylResolver(methylMix = consB[x,], methylSig = MethylSig[x,], betaPrime = FALSE)
+mr = as.data.frame(fread("MethylResolver.txt"))
+```
+
+```{r}
+mr = mr %>% mutate(file = V1) %>% left_join(cspl, by = "file")
+```
+
+```{r}
+mr %>% fwrite("mr_comb.tsv")
+```
+
+```{r}
+mr = mr %>% mutate(type = factor(ifelse(type %in% c("chordoma_1", "chordoma_2"), gsub("metacluster_", "Huo_et_al.\nchordoma_", mc), type), levels = c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C", "chordoma_I", "chordoma_C", "nucleus_pulposus")))
+```
+
+
+
+```{r}
+dct = c("Purity" = "Tumor Purity",
+        "abs_CD8" = "Cytotoxic T-cells",
+        "abs_Tmem" = "Helper T-cells")
+
+el = setdiff(colnames(mr)[grepl("abs", colnames(mr))], names(dct))
+
+
+dct = c(dct, setNames(el, el))
+  
+pl = lapply(names(dct), function(pop){
+  df = mr
+  df[,"what"] = df[,pop]
+  df = rbind(df,
+             df %>% mutate(type = mc)) %>% 
+    mutate(x = factor(type, levels = c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C", "chordoma_I", "chordoma_C", "nucleus_pulposus", "metacluster_I", "metacluster_C")))
+
+  el = data.frame(
+      x = c(3.5, 1.5, 6.5),
+      y = rep(1.1*max(df$what),3),
+      p = c(wilcox.test(what ~type, data = df %>% filter(type %in% c("chordoma_I", "chordoma_C")))$p.value,
+            wilcox.test(what ~type, data = df %>% filter(type %in% c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C")))$p.value,
+            wilcox.test(what ~type, data = df %>% filter(type %in% c("metacluster_I", "metacluster_C")))$p.value)) %>%
+      mutate(lab = ifelse(p < 0.05, sprintf("p = %s", signif(p, 2)), ""))
+  
+  p = ggplot() +
+    geom_jitter(data = df, aes(x = x, y = what, fill = type), pch = 21, color = "transparent", width = 0.2, height = 0) +
+    geom_boxplot(data = df, aes(x = x, y = what, color = type), fill = "transparent", width = 0.8, outlier.shape = NA) +
+    geom_text(data = el, aes(x = x, y = y, label = lab)) + 
+    scale_color_manual(values = darken(cols, 0.1), breaks = names(cols)) +
+    scale_fill_manual(values = lighten(cols, 0.4), breaks = names(cols)) +
+    labs(title = dct[pop], y = "MethylResolver est.") +
+    scale_x_discrete(breaks = levels(df$type), labels = gsub("_", " ", levels(df$type))) +
+    theme_bw() + 
+    theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), plot.title = element_text(hjust = 0.5), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), plot.margin = margin(5,5,5,5))
+  
+  return(p)
+})
+
+#pn_e = ggarrange(plotlist = pl, nrow = 1, ncol = 3)
+#pn_e
+pl  
+```
+
+```{r}
+pn_d = pl[[2]]
+pn_sd = pl[[1]]
+pn_se = pl[[3]]
+```
+
+```{r}
+ggsave(ggarrange(pn_a,
+                 pn_b,
+                 ggarrange(pn_c, pn_d, labels = c("c", "d"), align = "h"),
+                 nrow = 3, ncol = 1, heights = c(1.5, 1, 1), labels = c("a", "b", "")) +
+         theme(panel.background = element_rect(fill = "white", color = "white")),
+       filename = "figure6.png", width = 210, height = 0.7*297, scale = 1.6, units = "mm",dpi = 400)
+
+```
+```{r}
+anno = anno %>% mutate(Relation_to_Gene = ifelse(UCSC_RefGene_Group == "", "Intergenic",
+                                        ifelse(grepl("TSS200", UCSC_RefGene_Group),  "TSS200",
+                                        ifelse(grepl("TSS1500", UCSC_RefGene_Group), "TSS1500",
+                                        ifelse(grepl("5'UTR", UCSC_RefGene_Group), "5'UTR",
+                                        ifelse(grepl("1stExon", UCSC_RefGene_Group), "1stExon",
+                                        ifelse(grepl("Body", UCSC_RefGene_Group), "Body",
+                                        ifelse(grepl("ExonBnd", UCSC_RefGene_Group), "Body",
+                                        ifelse(grepl("3'UTR", UCSC_RefGene_Group), "3'UTR", "unknown")))))))))
+
+table(anno$Relation_to_Gene)
+```
+```{r}
+gm = consB[consBsd > 0.1,] %>%
+  as.data.frame() %>% 
+  rownames_to_column("probe") %>%
+  left_join(anno %>% rownames_to_column("probe") %>% dplyr::rename(relation = "Relation_to_Gene") %>% select(probe, relation), by = "probe") %>% 
+  pivot_longer(cols = colnames(consB), values_to = "b", names_to = "file") %>% 
+  left_join(cspl, by = "file") 
+
+
+pn_sa.dt = gm
+pn_sa.dt = rbind(pn_sa.dt, pn_sa.dt %>% mutate(relation = "all"))
+
+pn_sa.dt = pn_sa.dt %>%
+  mutate(type = factor(ifelse(type %in% c("chordoma_1", "chordoma_2"), gsub("metacluster_", "Huo_et_al.\nchordoma_", mc), type), levels = c("Huo_et_al.\nchordoma_I", "Huo_et_al.\nchordoma_C", "chordoma_I", "chordoma_C", "nucleus_pulposus")),
+         relation = factor(gsub("N_", "", gsub("S_", "", relation)), levels = c("all", "TSS200", "TSS1500", "5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR", "Intergenic")))
+```
+
+
+```{r}
+pn_sa = ggplot(data = pn_sa.dt) + 
+  geom_violin(aes(x = type, y = b, fill = type), color = "transparent") +
+  geom_boxplot(aes(x = type, y = b, color = type), width = 0.3, outlier.shape = NA, fill = "transparent") +
+  scale_color_manual(name = "Sample", values = darken(cols, 0.5), breaks = names(cols), labels = gsub("_", " ", names(cols))) +
+  scale_fill_manual(name = "Sample", values = darken(cols, -0.1), breaks = names(cols), labels = gsub("_", " ", names(cols))) + 
+  facet_grid(~relation) + 
+  theme_bw() +
+  scale_x_discrete(breaks = levels(pn_sa.dt$type), labels = gsub("_", " ", levels(pn_sa.dt$type))) +
+  scale_y_continuous(limits = c(0,1), expand = c(0,0), name = "β-value") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), legend.position = "none", panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), axis.title.x = element_blank())
+
+
+```
+
+
+```{r}
+```
+
+
+
+```{r}
+set.seed(1995)
+library(umap)
+umap.defaults$n_neighbors = 5
+umap.defaults$knn_repeats = 5
+u = umap(consM, umap.defaults = umap.defaults)
+u
+```
+
+
+
+
+```{r}
+df = u$layout %>% data.frame() %>% dplyr::rename(x = "X1", y = "X2") %>% rownames_to_column("file") %>% left_join(cspl %>% select(file, mc, type), by = "file")
+
+pn_sb = ggplot(data = df) +
+  geom_point(mapping = aes(x = x, y = y, fill = type, color = type, shape = mc), size = 3, alpha = 0.5) +
+  #geom_boxplot(aes(color = type, x = 1.2 * max(x), y = y), fill = "transparent", outlier.shape = NA, width = 1) +
+  #geom_boxplot(aes(color = type, x = x, y = 1.2*max(y)), fill = "transparent", outlier.shape = NA, width = 1) +
+  scale_fill_manual(values = unname(cols), name = "Original\ncluster", breaks = names(cols), labels = gsub("_", " ", names(cols))) +
+  scale_color_manual(values = unname(cols), name = "Original\ncluster", breaks = names(cols), labels = gsub("_", " ", names(cols))) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  scale_shape_manual(breaks = c("metacluster_I", "metacluster_C"), values = c(22,21), labels = gsub("_", " ",c("metacluster_I", "metacluster_C")), name = "Metacluster") +
+  labs(x = "UMAP 1", y = "UMAP 2", title = "Uniform Manifold Approximation and Projection") +
+  coord_fixed()
+
+pn_sb
+```
+
+
+```{r}
+
+ggsave(ggarrange(pn_sa,
+                 ggarrange(pn_sb, pn_sc, pn_sd, pn_se, nrow = 2, ncol = 2, labels = letters[2:5]),
+                 nrow = 2, ncol = 1, heights = c(3,4), labels = c("a", ""))+
+         theme(panel.background = element_rect(fill = "white", color = "white")),
+       filename = "SuplFig5.png", width = 210, height = 0.7*297, scale = 1.6, units = "mm",dpi = 400)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+pl = lapply(c("cg15645309", "cg01234517", "cg10847094", "cg01392518", "cg12044599", "cg15797102"), function(probe){
+
+  df = consB[probe,]
+  df = data.frame(b = df, file = names(df))
+  df = rbind(
+    df %>% left_join(cspl %>% dplyr::select(file, type)),
+    df  %>% left_join(cspl %>% dplyr::select(file, type, mc)) %>% filter(!type == "nucleus_pulposus") %>% select(-type) %>% dplyr::rename(type = "mc")
+  ) %>% mutate(x = factor(gsub("_", " ", type), levels = c("nucleus pulposus", "chordoma I", "chordoma C", "chordoma 1", "chordoma 2", "metacluster I", "metacluster C")))
+  
+  el = data.frame(
+    x = c(2.5, 4.5, 6.5),
+    y = c(1.1,1.1,1.1),
+    p = c(wilcox.test(b~type, data = df %>% filter(type %in% c("chordoma_I", "chordoma_C")))$p.value,
+          wilcox.test(b~type, data = df %>% filter(type %in% c("chordoma_1", "chordoma_2")))$p.value,
+          wilcox.test(b~type, data = df %>% filter(type %in% c("metacluster_C", "metacluster_I") & !type == "nucleus_pulposus"))$p.value)) %>%
+    mutate(lab = ifelse(p < 0.05, sprintf("p = %s", signif(p, 2)), ""))
+  
+  p = ggplot() +
+    geom_jitter(data = df, aes(x = x, y = b, fill = type), pch = 21, color = "transparent", width = 0.2, height = 0) +
+    geom_boxplot(data = df, aes(x = x, y = b, color = type), fill = "transparent", width = 0.8, outlier.shape = NA) +
+    geom_text(data = el, aes(x = x, y = y, label = lab)) + 
+    scale_color_manual(values = darken(cols, 0.1), breaks = names(cols)) +
+    scale_fill_manual(values = lighten(cols, 0.4), breaks = names(cols)) +
+    scale_y_continuous(limits = c(0, 1.2), expand = c(0,0), breaks = (0:4)/4) +
+    labs(title = probe, y = "β-value") +
+    theme_bw() + 
+    theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), plot.title = element_text(hjust = 0.5), panel.grid.minor = element_blank(), panel.grid.major.x = element_blank(), plot.margin = margin(5,5,5,5))
+
+  return(p)
+})
+
+```
+```{r}
+pn_d = ggarrange(plotlist = pl, nrow = 2, ncol = 3)
+pn_d
+```
+
+
+```{r}
+ggsave(ggarrange(pn_a,
+          ggarrange(pn_b, pn_c, common.legend = TRUE, legend = "right", labels = c("b", "c")),
+          pn_d,
+          pn_e,
+          nrow = 4, ncol = 1, heights = c(1.5, 1, 2, 1), labels = c("a", "", "d", "e")) +
+         theme(panel.background = element_rect(fill = "white", color = "white")),
+       filename = "figure6.png", width = 210, height = 297, scale = 1.6, units = "mm",dpi = 400)
+```
+
+
+```{r}
+table((cspl %>% filter(predHuo < 0.5))$type)
+```
+
+
+
+```{r}
+cspl = cspl %>% mutate(surv = Surv(days, alive %in% c("no", "Dead")))
+
+p = survfit(surv ~ mc, data = cspl, conf.int = 0.8)
+p = autoplot(p, conf.int = F, censor.colour = 'black') + theme_bw() + theme(panel.grid.minor = element_blank()) + scale_x_continuous(limits = c(0, 1.05*max(spl$days, na.rm = T)), expand = c(0,0), breaks = round(365.25*1:floor(max(spl$days, na.rm = T)/365.25)), name = "Time [days]") + scale_y_continuous(limits = c(0, 1.05), expand = c(0,0), name = "Survival probability", breaks = 0:4/4, labels = paste0(100*(0:4)/4, "%"))
+
+p
+```
+
+```{r}
+pd = pd %>% mutate(surv = Surv(DFS, Recurrence == "Yes" | status == "Dead"))
+
+p = survfit(surv ~ fc, data = pd, conf.int = 0.8)
+p = autoplot(p, conf.int = F, censor.colour = 'black') + theme_bw() + theme(panel.grid.minor = element_blank()) + scale_x_continuous(expand = c(0,0), breaks = round(365.25*1:floor(max(spl$days, na.rm = T)/365.25)), name = "Time [days]") + scale_y_continuous(limits = c(0, 1.05), expand = c(0,0), name = "Survival probability", breaks = 0:4/4, labels = paste0(100*(0:4)/4, "%"))
+
+p
+```
+
+```{r}
+pd$mc = cspl$mc[match(pd$prefix, cspl$file)]
+```
+
+```{r}
+p = survfit(surv ~ mc, data = pd, conf.int = 0.8)
+p = autoplot(p, conf.int = F, censor.colour = 'black') + theme_bw() + theme(panel.grid.minor = element_blank()) + scale_x_continuous(expand = c(0,0), breaks = round(365.25*1:floor(max(spl$days, na.rm = T)/365.25)), name = "Time [days]") + scale_y_continuous(limits = c(0, 1.05), expand = c(0,0), name = "Survival probability", breaks = 0:4/4, labels = paste0(100*(0:4)/4, "%"))
+
+p
+```
+```{r}
+survdiff(surv~mc, data = pd)
+```
+
+```{r}
+coxph(surv~mc+source, data = cspl)
+```
+
+
+
+```{r}
+x = intersect(rownames(B), rownames(beta)[rev(order(mads))[1:10000]])
+d= B[x,]
+d = sweep(d,1, apply(d,1,median,na.rm=T))
+res_our = ConsensusClusterPlus(d)
+```
+```{r}
+spl$alt_cl = res_our[[2]]$consensusClass[spl$sample]
+```
+```{r}
+xtabs(~type+alt_cl, data = spl)
+```
+
+
+
+

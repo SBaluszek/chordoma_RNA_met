@@ -1,0 +1,1144 @@
+---
+title: "Figure 1"
+output: html_notebook
+---
+
+```{r}
+ndir = function(ndir){
+  if(!dir.exists(ndir)){
+    dir.create(ndir)
+  }
+  setwd(ndir)
+}
+
+dropNA = function(el){el[!is.na(el)]}
+
+pckgs = c("BiocManager", "ggplot2", "limma", "tidyverse", "readxl", "ggnewscale", "annotatr", "AnnotationHub", "ggrepel", "RColorBrewer", "mclust", "survival", "survminer", "data.table", "dplyr", "tidyr", "ggplot2", "ggdendro", "ggnewscale", "minfi", "IlluminaHumanMethylationEPICanno.ilm10b4.hg19", "colorspace", "ComplexHeatmap", "ENmix", "ggmosaic", "TxDb.Hsapiens.UCSC.hg19.knownGene")
+x = setdiff(pckgs, installed.packages())
+if(length(x>0)){
+  install.packages(x)
+}
+x = setdiff(pckgs, installed.packages())
+if(length(x>0)){
+  BiocManager::install(x, ask = F, update = T)
+}
+gh = c("traversc/trqwe")
+x = setdiff(names(gh), installed.packages())
+if(length(x>0)){
+  for(el in x){
+    devtools::install_github(gh[el])
+}}
+sapply(c(pckgs, names(gh)), library, character.only = T)
+```
+
+```{r}
+#PATH = "D:/Files/Molecular_data/A4564/idats"
+```
+
+
+
+```{r}
+'ndir("fig1_res")
+mset = read.metharray(file.path(PATH, spl$file[!is.na(spl$file)]), verbose = TRUE)
+
+pData(mset)$type = spl[match(sampleNames(mset), spl$file),"source"]
+
+detP = detectionP(mset)
+failed = detP>0.01
+failed = rownames(failed[rowMeans(failed)>0.25,]) # How many positions failed in >25% of samples?
+failed
+
+
+qcReport(mset, sampNames=spl$spl[match(colnames(mset), spl$file)], spl$source[match(colnames(mset), spl$file)], pdf="qcReport.pdf")
+
+rppcs = preprocessRaw(mset)
+qc = getQC(rppcs)
+
+png(file="QC_logplot.png", width = 8, height = 6, units = "in", res = 400)
+plotQC(qc)
+dev.off()
+
+rm(list = c("rppcs", "x", "qc"))
+
+nset = preprocessFunnorm(mset)
+dim(nset)
+nset = nset[setdiff(rownames(nset), failed),]
+dim(nset)
+nset = addSnpInfo(nset)
+nset = dropLociWithSnps(nset, snps=c("SBE","CpG"), maf=0)
+dim(nset)
+
+
+mcsaveRDS(nset, "nset.rds")'
+```
+
+
+```{r}
+ndir("fig1_res")
+nset = read_rds("nset.rds")
+```
+
+
+
+
+
+```{r}
+anno = getAnnotation(nset)
+anno = as.data.frame(anno)
+```
+
+
+
+
+```{r}
+ndir("fig1_res")
+'B = getBeta(nset)
+colnames(B) = spl$sample[match(colnames(B), spl$file)]
+B_sd = apply(B[, spl$source[match(colnames(B), spl$sample)] == "chordoma"], 1, sd, na.rm = TRUE)
+
+M = getM(nset)
+colnames(M) = spl$sample[match(colnames(M), spl$file)]
+M_var = apply(M[, spl$source[match(colnames(M), spl$sample)] == "chordoma"], 1, var, na.rm = TRUE)
+M = M[order(M_var, decreasing = T),]
+
+save(M, B, B_sd, M_var, file = "beta_and_M.Rdata")
+write.csv(M, file =  "m_values.csv", quote = F)'
+
+load("beta_and_M.Rdata")
+```
+
+
+```{r}
+el = 1 #percent of variable probes
+
+dim(M)
+Mfrac = M[B_sd[rownames(M)] > 0.1,] #selecting for higher beta variation
+dim(Mfrac)
+Mfrac = Mfrac[anno$chr[match(rownames(Mfrac), rownames(anno))] %in% paste0("chr", 1:22),] # selecting autosomes
+dim(Mfrac)
+Mfrac = Mfrac[1:round(dim(Mfrac)[1]*el/100),] #as M is sorted by variance this selects el% most variable probes
+dim(Mfrac)
+
+#scaling
+Mfrac[Mfrac == Inf] = max(Mfrac[!Mfrac == Inf]) +1
+Mfrac[Mfrac == -Inf] = min(Mfrac[!Mfrac == -Inf]) -1
+Mfrac = scale(t(Mfrac))
+```
+
+
+
+```{r}
+'
+ndir("fig1_res")
+#clustering
+set.seed(2022)
+mod1 = Mclust(Mfrac)
+
+spl$mod1 = mod1$classification[spl$sample]
+spl$type = ifelse(spl$mod1 == 3, "nucleus_pulposus", ifelse(spl$mod1 == 1, "chordoma_I", "chordoma_C"))
+
+m1 = "euclidean"
+m2 = "ward.D"
+clust = hclust(dist(Mfrac, method = m1), method = m2)
+clust = dendextend::rotate(clust, order = c(labels(clust)[10:36], rev(labels(clust)[1:9])))
+dropNA(cutree(clust, 3)[spl$Sample_Name] == spl$mod1)
+
+mcsaveRDS(clust, file = "clustering_methyl.rds")
+write.csv(spl, "spl_clust.csv", quote = FALSE, row.names = FALSE)
+'
+```
+
+
+```{r}
+ndir("fig1_res")
+spl = read.csv(file = "spl_clust.csv")
+clust = read_rds(file = "clustering_methyl.rds")
+```
+
+
+
+
+```{r}
+find_dmps = function(M, g, ref){
+  x = M[,g %in% ref]
+  g = g[g %in% ref]
+  design = as.matrix(data.frame(row.names = colnames(x),
+                                g1 = ifelse(g == ref[1], 1, 0),
+                                g2 = ifelse(g == ref[2], 1, 0)))
+  fit = limma::lmFit(x, design = design)
+  cont.matrix <- makeContrasts(g=g1-g2, levels=design)
+  fit2 <- contrasts.fit(fit, cont.matrix)
+  y = eBayes(fit2)
+  return(y)
+}
+```
+
+```{r}
+dmp = data.frame(row.names = rownames(M), probe = row.names(M))
+
+dmp$B_NP = rowMeans(B[as.character(dmp$probe),spl$source[match(colnames(B), spl$sample)] == "nucleus_pulposus"])
+dmp$B_Ch = rowMeans(B[as.character(dmp$probe),spl$source[match(colnames(B), spl$sample)] == "chordoma"])
+dmp$B_CI = rowMeans(B[as.character(dmp$probe),spl$type[match(colnames(B), spl$sample)] == "chordoma_I"])
+dmp$B_CC = rowMeans(B[as.character(dmp$probe),spl$type[match(colnames(B), spl$sample)] == "chordoma_C"])
+
+dmp$dB_Ch_NP = dmp$B_Ch - dmp$B_NP
+dmp$dB_CI_CC = dmp$B_CI - dmp$B_CC
+dmp$dB_CI_NP = dmp$B_CI - dmp$B_NP
+dmp$dB_CC_NP = dmp$B_CC - dmp$B_NP
+
+y = find_dmps(M = M, g = spl$source[match(colnames(M), spl$sample)], ref = c("chordoma", "nucleus_pulposus"))
+dmp = cbind(dmp, rename_with(data.frame(t = y$t[,1][dmp$probe], p = y$p.value[,1][dmp$probe]), function(el){paste0(el, "_Ch_NP")}))
+
+y = find_dmps(M = M, g = spl$type[match(colnames(M), spl$sample)], ref = c("chordoma_I", "chordoma_C"))
+dmp = cbind(dmp, rename_with(data.frame(t = y$t[,1][dmp$probe], p = y$p.value[,1][dmp$probe]), function(el){paste0(el, "_CI_CC")}))
+
+y = find_dmps(M = M, g = spl$type[match(colnames(M), spl$sample)], ref = c("chordoma_I", "nucleus_pulposus"))
+dmp = cbind(dmp, rename_with(data.frame(t = y$t[,1][dmp$probe], p = y$p.value[,1][dmp$probe]), function(el){paste0(el, "_CI_NP")}))
+
+y = find_dmps(M = M, g = spl$type[match(colnames(M), spl$sample)], ref = c("chordoma_C", "nucleus_pulposus"))
+dmp = cbind(dmp, rename_with(data.frame(t = y$t[,1][dmp$probe], p = y$p.value[,1][dmp$probe]), function(el){paste0(el, "_CC_NP")}))
+
+
+dmp = dmp %>% mutate(Ch_NP_gr = ifelse(p_Ch_NP > 9e-8 | abs(dB_Ch_NP) < 0.10, "ns", ifelse(dB_Ch_NP > 0, "hyper", "hypo")))
+dmp = dmp %>% mutate(CI_CC_gr = ifelse(p_CI_CC > 9e-8 | abs(dB_CI_CC) < 0.10, "ns", ifelse(dB_CI_CC > 0, "hyper", "hypo")))
+dmp = dmp %>% mutate(CI_NP_gr = ifelse(p_CI_NP > 9e-8 | abs(dB_CI_NP) < 0.10, "ns", ifelse(dB_CI_NP > 0, "hyper", "hypo")))
+dmp = dmp %>% mutate(CC_NP_gr = ifelse(p_CC_NP > 9e-8 | abs(dB_CC_NP) < 0.10, "ns", ifelse(dB_CC_NP > 0, "hyper", "hypo")))
+table(dmp$Ch_NP_gr)
+table(dmp$CI_CC_gr)
+table(dmp$CI_NP_gr)
+table(dmp$CC_NP_gr)
+```
+
+
+
+
+
+```{r}
+dmp[,setdiff(colnames(dmp), c("Name", "chr", "pos", "strand", "Type", "Islands_Name", "Relation_to_Island", "UCSC_RefGene_Name", "UCSC_RefGene_Group", "DNase_Hypersensitivity_NAME", "OpenChromatin_NAME"))]
+
+dmp = cbind(dmp, anno[rownames(dmp),c("Name", "chr", "pos", "strand", "Type", "Islands_Name", "Relation_to_Island", "UCSC_RefGene_Name", "UCSC_RefGene_Group", "DNase_Hypersensitivity_NAME", "OpenChromatin_NAME")])
+
+dmp = dmp %>% dplyr::select(probe, chr, pos, strand, Type, Islands_Name, Relation_to_Island, UCSC_RefGene_Name, UCSC_RefGene_Group, DNase_Hypersensitivity_NAME, OpenChromatin_NAME, Ch_NP_gr, p_Ch_NP, dB_Ch_NP, t_Ch_NP, CI_CC_gr, p_CI_CC, dB_CI_CC, t_CI_CC, CI_NP_gr, p_CI_NP, dB_CI_NP, t_CI_NP, CC_NP_gr, p_CC_NP, dB_CC_NP, t_CC_NP, B_NP, B_Ch, B_CI, B_CC)
+```
+
+```{r}
+dmp[rowSums(dmp %>% dplyr::select(Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) == "ns") < 4,]
+```
+
+```{r}
+
+dmp = dmp %>% mutate(Relation_to_Gene = ifelse(UCSC_RefGene_Group == "", "Intergenic",
+                                        ifelse(grepl("TSS200", UCSC_RefGene_Group),  "TSS200",
+                                        ifelse(grepl("TSS1500", UCSC_RefGene_Group), "TSS1500",
+                                        ifelse(grepl("5'UTR", UCSC_RefGene_Group), "5'UTR",
+                                        ifelse(grepl("1stExon", UCSC_RefGene_Group), "1stExon",
+                                        ifelse(grepl("Body", UCSC_RefGene_Group), "Body",
+                                        ifelse(grepl("ExonBnd", UCSC_RefGene_Group), "ExonBnd",
+                                        ifelse(grepl("3'UTR", UCSC_RefGene_Group), "3'UTR", "unknown")))))))))
+                                                              
+table(dmp$Relation_to_Gene)
+
+```
+
+
+```{r}
+ndir("fig1_res")
+write.csv(dmp, file = "all_dmps.csv", row.names = F, quote = F)
+write.csv(dmp[rowSums(dmp %>% dplyr::select(Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) == "ns") < 4,], file = "signif_dmps.csv", row.names = F, quote = F)
+```
+
+```{r}
+ndir("fig1_res")
+dmp = read.csv(file = "all_dmps.csv")
+dmp
+```
+
+
+
+```{r}
+cols = setNames(RColorBrewer::brewer.pal(3, "Set2"), c("chordoma_C", "nucleus_pulposus", "chordoma_I"))[c("chordoma_I", "chordoma_C",  "nucleus_pulposus")]
+
+col.cgi = c("Island" = "burlywood4", "Shore" = "khaki", "Shelf" = "paleturquoise", "OpenSea" = "blue4")
+```
+
+```{r}
+library(ggdendro)
+library(ggnewscale)
+
+pdf = as.dendrogram(clust)
+pdf = dendro_data(pdf, type = "rectangle")
+segment(pdf)
+
+spl$x = setNames(1:max(clust$order), clust$labels[clust$order])[spl$sample]
+
+ct = 1
+p = ggplot()
+
+p = p + geom_tile(data = spl %>% filter(!is.na(type)) %>% mutate(y = ct), aes(x = x, y = y, fill = type)) +
+  scale_fill_manual(name = "Methylation\ncluster", values = unname(cols), breaks = names(cols), labels = gsub("_", " ", names(cols)), guide = guide_legend(order = 3)) +
+  new_scale_fill()
+ct = ct + 1
+
+p = p + geom_tile(data = spl %>% filter(!is.na(type))%>% mutate(y = ct), aes(x = x, y = y, fill = sex)) +
+  scale_fill_manual(name = "Sex", values = c("male" = "skyblue", "female" = "pink"), guide = guide_legend(order = 2, nrow = 1)) +
+  new_scale_fill()
+ct = ct + 1
+
+p = p + geom_tile(data = spl %>% filter(!is.na(type))%>% mutate(y = ct), aes(x = x, y = y, fill = age)) +
+  scale_fill_gradientn(name = "Age", limits = c(0,80), colors = c("white", rev(viridis::viridis(10)), "black"), values = unname(c(0, quantile(spl$age[spl$source == "chordoma"], na.rm = T), 80))/80, guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 1)) +
+  new_scale_fill()
+ct = ct + 1
+
+p = p + geom_segment(data = (pdf$segments) %>% mutate(spl = "Cluster"), mapping = aes(x = x, y = y/100 + ct - 1.5, xend = xend, yend = yend/100  + ct - 1.5 )) 
+
+X = as.data.frame(Mfrac) %>% tibble::rownames_to_column("sample") %>% pivot_longer(values_to = "M", names_to = "probe", cols = colnames(Mfrac)) %>% mutate(rti = gsub("N_", "", gsub("S_", "", dmp$Relation_to_Island[match(probe, dmp$probe)], "_")))
+
+
+y = 0
+
+for(el in rev(c("OpenSea", "Shelf", "Shore", "Island"))){
+  cl = hclust(dist(t(Mfrac[,unique((X %>% filter(rti==el))$probe)])), method = "ward.D")
+  y = c(y, setNames(max(y) + 1:max(cl$order), cl$label[cl$order]))
+}
+
+y = y[!y==0]
+
+y = 5*max(sapply(ggplot_build(p)$data, function(el){max(el$y)}))*y/max(y)
+
+X$y = y[X$probe]
+
+X$x = setNames(1:max(clust$order), clust$labels[clust$order])[X$sample]
+
+
+
+f = function(x){(x-min(x))/(max(x)-min(x))}
+
+p = p + geom_raster(data = X, aes(x = x, y = -y + 0.2, fill = M)) +
+  scale_fill_gradientn(name = "M-value", colors = c("midnightblue", "blue", "royalblue", "lightsteelblue1", "gray95", "lemonchiffon", "yellow", "gold", "darkorange"), values = unname(f(quantile(X$M, seq(0,1,1/8)))), guide = guide_colourbar(direction = "horizontal", title.position = "top",order = 4)) +
+  new_scale_fill() #colors = c(darken(rev(RColorBrewer::brewer.pal(5, "PuBu")),0.2),"white", darken(RColorBrewer::brewer.pal(5, "YlOrBr"),0.2)),))
+ct = ct + 1
+
+p = p + geom_raster(data = X %>% distinct(probe, rti) %>% mutate(x = min(X$x) - 1.3, y = y[probe]), aes(x = x, y = -y + 0.2, fill = rti)) +
+  scale_fill_manual(values = col.cgi, name = "Relation\nto island", breaks = names(col.cgi), guide = guide_legend(order = 5, nrow = 2))
+
+p = p +
+  scale_x_continuous(breaks = 1:max(clust$order), labels = clust$labels[clust$order], expand = 0.01*c(1,1)) +
+  theme_void() + theme(plot.background = element_rect(fill = "white", color = "white")) #+ theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+```
+
+
+
+```{r}
+ndir("fig1_res")
+ggsave(p, filename = "fig1a.png", width = 210, height = 70, units = "mm", dpi = 400, scale = 1.8)
+#ggsave(p, filename = "fig1a.pdf", width = 210, height = 70, units = "mm", dpi = 400, scale = 1.8)
+mcsaveRDS(p, "fig1a.rds")
+
+ggsave(p + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)), filename = "fig1a_sn.png", width = 210, height = 100, units = "mm", dpi = 400, scale = 1.8)
+
+```
+
+```{r}
+x = B
+x = as.data.frame(x)
+x$probe = rownames(x)
+dim(x)
+x = x[B_sd[x$probe] > 0.1,]
+dim(x)
+
+x = setDT(pivot_longer(x,cols = intersect(colnames(x), colnames(B)), names_to = "sample", values_to = "B"))
+x = rbind(x %>% mutate(relation = "All"),
+      x %>% mutate(relation = gsub("S_", "", gsub("N_", "", dmp$Relation_to_Island[match(probe, dmp$probe)]))),
+      x %>% mutate(relation = dmp$Relation_to_Gene[match(probe, dmp$probe)])) %>%
+  mutate(relation = factor(as.character(relation), levels = c("All", "Island", "Shore", "Shelf", "OpenSea", "TSS200", "TSS1500", "5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR", "Intergenic")),
+         type = factor(spl$type[match(sample, spl$sample)], levels = c("nucleus_pulposus","chordoma_C", "chordoma_I")))
+
+p = ggplot(data = x) + 
+  geom_violin(aes(y = type, x = B, fill = type), color = "transparent") +
+  geom_boxplot(aes(y = type, x = B, color = type), width = 0.3, outlier.shape = NA, fill = "transparent") +
+  scale_color_manual(name = "Sample", values = darken(cols, 0.5), breaks = names(cols), labels = gsub("_", " ", names(cols))) +
+  scale_fill_manual(name = "Sample", values = darken(cols, -0.1), breaks = names(cols), labels = gsub("_", " ", names(cols))) +
+  facet_grid(relation~.) + theme_bw() + theme(axis.ticks.y = element_blank(), axis.title.y = element_blank(), axis.text.y = element_blank(), axis.text.x = element_text(angle = 90, vjust = 0.5), legend.position = "bottom", panel.spacing = unit(0, "lines")) +   scale_x_continuous(limits = c(0,1), expand = c(0,0), name = "β-value")
+
+fig1b = p
+ndir("fig1_res")
+'ggsave(p, filename = "fig1b.png", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+ggsave(p, filename = "fig1b.pdf", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)'
+mcsaveRDS(p, file = "fig1b.rds")
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+```{r}
+x = M
+x = as.data.frame(x)
+x$probe = rownames(x)
+
+dim(x)
+x = x[B_sd[x$probe] > 0.1,]
+dim(x)
+
+x = pivot_longer(x,cols = intersect(colnames(x), colnames(M)), names_to = "sample", values_to = "M")
+x$rti = factor(gsub("S_", "", gsub("N_", "", dmp$Relation_to_Island[match(x$probe, dmp$probe)])), levels = rev(c("Island", "Shore", "Shelf", "OpenSea")))
+x$type = factor(spl$type[match(x$sample, spl$sample)], levels = c("nucleus_pulposus", "chordoma_I", "chordoma_C"))
+x = x[!is.na(x$M),]
+x = x[!abs((x$M)) == Inf,]
+
+model = lm(M ~ rti + type + rti:type, data = x)
+summary(model)
+
+ndir("fig1_res")
+mcsaveRDS(model, file = "model_cgi.rds")
+#model = mcreadRDS("model_cgi.rds")
+
+df = summary(model)
+df = as.data.frame(df$coefficients)
+df = cbind(df, as.data.frame(confint(model))[rownames(df),])
+write.csv(df, file = "model_cgi_with_confint.csv")
+
+df = df %>%
+  rownames_to_column("name") 
+df = df %>%
+  mutate(type = factor(ifelse(grepl(":", name), "Combination", "Univariate"), levels = c("Univariate", "Combination"))) %>% mutate(from = ifelse(type == "Univariate", 0, sapply(strsplit(name, ":"), function(el){sum(df$Estimate[df$name %in% el])}))) %>% 
+  mutate(to = from + Estimate)
+
+el = setNames(c("Shelf", "Shore", "Island","Chordoma C", "Chordoma I"), c("rtiShelf", "rtiShore", "rtiIsland","typechordoma_C", "typechordoma_I"))
+df$y = df$name
+for(em in 1:length(el)){
+  df$y = gsub(names(el)[em], el[em], df$y)
+}
+#df$y = gsub(" and\n", ":", df$y)
+df$y = factor(df$y, levels = rev(df$y))
+
+
+p_1c1 = ggplot() +
+  geom_vline(xintercept = 0) +
+  geom_segment(data = df, aes(y = y, yend = y, x = from, xend = to, color = Estimate), arrow = arrow(length = unit(0.1, "cm")), lineend = "round", linejoin = "mitre", size = 1.5) +
+  scale_color_gradientn(limits = c(-1,1) * max(abs(df$Estimate)), colors = c("cyan", "royalblue", "navy", "gray30", "red4", "red", "gold")) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), axis.title.y = element_blank()) +
+  labs(x = "Effect on methylation", title = "Relation to island model", subtitle = "Reference: OpenSea, nucleus pulposus") +
+  facet_grid(type~., scales = "free_y", space = "free_y")
+p_1c1
+```
+
+
+```{r}
+ndir("fig1_res")
+ggsave(p_1c1, filename = "fig1c1.png", width = 63.5, height = 5*120/12, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+
+
+`
+
+
+```{r}
+x = M
+x = as.data.frame(x)
+x$probe = rownames(x)
+
+dim(x)
+x = x[B_sd[x$probe] > 0.1,]
+dim(x)
+
+x = pivot_longer(x,cols = intersect(colnames(x), colnames(M)), names_to = "sample", values_to = "M")
+x$rti = factor(dmp$Relation_to_Gene[match(x$probe, dmp$probe)], levels = rev(c("TSS200", "TSS1500", "5'UTR", "1stExon", "Body", "ExonBnd", "3'UTR", "Intergenic")))
+x$type = factor(spl$type[match(x$sample, spl$sample)], levels = c("nucleus_pulposus", "chordoma_I", "chordoma_C"))
+x = x[!is.na(x$M),]
+x = x[!abs((x$M)) == Inf,]
+x = droplevels(x[!x$rti == "ExonBnd",])
+
+model = lm(M ~ rti + type + rti:type, data = x)
+summary(model)
+
+ndir("fig1_res")
+mcsaveRDS(model, file = "model_gene.rds")
+
+df = summary(model)
+df = as.data.frame(df$coefficients)
+df = cbind(df, as.data.frame(confint(model))[rownames(df),])
+write.csv(df, file = "model_cgi_with_confint.csv")
+
+
+df = df %>% rownames_to_column("name")
+
+df = df %>% mutate(type = factor(ifelse(grepl(":", name), "Combination", "Univariate"), levels = c("Univariate", "Combination"))) %>% mutate(from = ifelse(type == "Univariate", 0, sapply(strsplit(name, ":"), function(el){sum(df$Estimate[df$name %in% el])}))) %>% 
+  mutate(to = from + Estimate)
+
+
+el = setNames(c("3'UTR", "Body", "1stExon", "5'UTR ", "TSS1500", "TSS200", "Chordoma I", "Chordoma C"), c("rti3'UTR", "rtiBody", "rti1stExon", "rti5'UTR", "rtiTSS1500", "rtiTSS200", "typechordoma_I", "typechordoma_C"))
+df$y = df$name
+for(em in 1:length(el)){
+  df$y = gsub(names(el)[em], el[em], df$y)
+}
+#df$y = gsub(" and\n", ":", df$y)
+df$y = factor(df$y, levels = rev(df$y))
+
+p_1c2 = ggplot() +
+  geom_vline(xintercept = 0) +
+  geom_segment(data = df, aes(y = y, yend = y, x = from, xend = to, color = Estimate), arrow = arrow(length = unit(0.1, "cm")), lineend = "round", linejoin = "mitre", size = 1.5) +
+  scale_color_gradientn(limits = c(-1,1) * max(abs(df$Estimate)), colors = c("cyan", "royalblue", "navy", "gray30", "red4", "red", "gold")) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank(), axis.title.y = element_blank()) +
+  labs(x = "Effect on methylation", title = "Relation to gene model", subtitle = "Reference: intergenic, nucleus pulposus") +
+  facet_grid(type~., scales = "free_y", space = "free_y")
+
+p_1c2
+```
+
+
+```{r}
+fig1c = ggarrange(p_1c1, p_1c2,
+          nrow = 2, ncol = 1, heights = c(5, 7), common.legend = T, legend = "bottom", align = "v") + theme(plot.background = element_rect(fill = "white", color = "white"))
+```
+
+```{r}
+ndir("fig1_res")
+ggsave(fig1c, filename = "fig1c.png", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+ggsave(fig1c, filename = "fig1c.pdf", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+mcsaveRDS(fig1c, "fig1c.rds")
+```
+
+
+```{r}
+dmp
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+ndir(file.path("fig1_res", "combp", "Ch_NP"))
+combp.res.Ch_NP = combp(data.frame(chr = gsub("chr", "", dmp$chr), start = dmp$pos, end = dmp$pos + 1, p = dmp$p_Ch_NP, probe = dmp$probe), nCores = 96, seed = 0.01, region_plot=F, mht_plot=F)
+```
+
+
+```{r}
+ndir(file.path("fig1_res", "combp", "CI_CC"))
+combp.res.CI_CC = combp(data.frame(chr = gsub("chr", "", dmp$chr), start = dmp$pos, end = dmp$pos + 1, p = dmp$p_CI_CC, probe = dmp$probe), nCores = 96, seed = 0.01, region_plot=F,mht_plot=F)
+```
+
+
+```{r}
+ndir(file.path("fig1_res", "combp", "CI_NP"))
+combp.res.CI_NP = combp(data.frame(chr = gsub("chr", "", dmp$chr), start = dmp$pos, end = dmp$pos + 1, p = dmp$p_CI_NP, probe = dmp$probe), nCores = 96, seed = 0.01, region_plot=F,mht_plot=F)
+```
+
+```{r}
+ndir(file.path("fig1_res", "combp", "CC_NP"))
+combp.res.CC_NP = combp(data.frame(chr = gsub("chr", "", dmp$chr), start = dmp$pos, end = dmp$pos + 1, p = dmp$p_CC_NP, probe = dmp$probe), nCores = 96, seed = 0.01, region_plot=F,mht_plot=F)
+```
+
+```{r}
+ndir("ah_cache")
+```
+
+
+```{r}
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+dmpGR = dmp %>% dplyr::select(c("pos", "chr", "strand", colnames(dmp)[grepl("dB_", colnames(dmp))],colnames(dmp)[grepl("_gr", colnames(dmp))], colnames(dmp)[grepl("p_", colnames(dmp))])) %>% mutate(start = pos, end = pos+1)
+
+dmpGR = makeGRangesFromDataFrame(dmpGR, keep.extra.columns = T)
+
+newcache = file.path(getwd(), "ah_cache")
+setAnnotationHubOption("CACHE", newcache)
+
+annots = c('hg19_cpgs', 'hg19_basicgenes')
+# Build the annotations (a single GRanges object)
+annotations = build_annotations(genome = 'hg19', annotations = annots)
+annotations = annotations[annotations@seqnames %in% paste0("chr", c("X", "Y", 1:22))]
+```
+
+```{r}
+
+```
+
+
+```{r}
+wd = getwd()
+dmrs = NULL
+for(el in c("Ch_NP", "CI_CC", "CI_NP", "CC_NP")){
+  ndir(file.path(wd, "fig1_res", "combp", el))
+  assign("x", fread(file = "resu_combp.csv") %>% mutate(chr = paste0("chr", chr)) %>% mutate(dmr = paste0(chr, ":", start, "-", end)))
+  
+  res = x
+  
+  y = as.data.frame(annotate_regions(makeGRangesFromDataFrame(x %>% mutate(start = start - 1000, end = end + 1000), keep.extra.columns = T), dmpGR))
+  res$probes_in_region = (table(y$dmr)[res$dmr])
+  y = as.data.frame(annotate_regions(makeGRangesFromDataFrame(x, keep.extra.columns = T), dmpGR))
+  
+  res$dB = tapply(y[,sprintf("annot.dB_%s", el)], y$dmr, mean)[res$dmr]
+  res$n_sig = tapply(!y[,sprintf("annot.%s_gr", el)] == "ns", y$dmr, sum)[res$dmr]
+  res = res %>% mutate(p_in_reg = nprobe / probes_in_region) %>% mutate(sig = abs(dB)>0.05 & pmax(fdr, sidak)<0.01 & (nprobe>10 | p_in_reg>0.5))
+  
+  y = setDT(as.data.frame(annotate_regions(makeGRangesFromDataFrame(x, keep.extra.columns = T), annotations)))
+  
+  z = (y %>% filter(grepl("hg19_genes", annot.type)))
+  res$relation_to_gene = tapply(z$annot.type, z$dmr, function(el){
+    gsub("hg19_genes_", "", paste(unique(el), collapse = "; "))
+  })[res$dmr]
+  res$gene = tapply(z$annot.symbol, z$dmr, function(el){
+    paste(dropNA(unique(el)), collapse = "; ")
+  })[res$dmr]
+  
+  z = (y %>% filter(grepl("hg19_cpg", annot.type)))
+  res$relation_to_island = tapply(z$annot.type, z$dmr, function(el){
+    gsub("hg19_cpg_", "", paste(unique(el), collapse = "; "))
+  })[res$dmr]
+
+  res$comp = el
+  
+  dmrs = rbind(dmrs, res)
+  print(el)
+}
+```
+
+```{r}
+library(trqwe)
+ndir("fig1_res")
+#mcsaveRDS(dmrs, "dmrs.rds")
+dmrs = mcreadRDS("dmrs.rds")
+```
+
+```{r}
+xtabs(~dir+comp, data = dmrs %>% filter(sig) %>% mutate(dir = ifelse(dB>0, "up", "down")))
+```
+
+
+```{r}
+chrlen = fread("http://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.chrom.sizes")
+colnames(chrlen) = c("chr", "end")
+chrlen = chrlen[match(paste0("chr", 1:22), chrlen$chr),]
+chrlen$start = 0
+chrlen$end = chrlen$end / 10e9 
+chrlen$cums = c(0, cumsum(chrlen$end))[1:length(chrlen$chr)]
+chrlen$cume = chrlen$cums + chrlen$end
+chrlen$mid = (chrlen$cums + chrlen$cume) /2
+chrlen
+```
+
+
+```{r}
+el = setNames(c("Chordoma I\nChordoma C", "Chordoma I\nnucleus pulposus", "Chordoma C\nnucleus pulposus"), c("CI_CC", "CI_NP", "CC_NP"))
+lvls = c("CI_CC", "CI_NP", "CC_NP", "Ch_NP", "transcripts")
+
+library(ggrepel)
+f = function(x){
+  (x - min(x)) / (max(x) - min(x))
+}
+
+em = do.call(rbind, lapply(unique(dmrs$comp), function(el){
+  chrlen %>% mutate(comp = el)
+}))  %>% mutate(chrnum = as.numeric(gsub("chr", "", chr)))
+
+em = left_join(em, dmrs %>% group_by(comp) %>% summarise(y = -log10(min(p))), by = "comp") %>% mutate(comp = factor(comp, levels = lvls))
+
+dt = dmrs %>% filter(sig & ! (chr %in% c("chrY", "chrX"))) %>% mutate(x = chrlen$cums[match(chr, chrlen$chr)] + ((start + end)/2)/10e9, comp = factor(as.character(comp), levels = lvls), probes_in_region = as.numeric(probes_in_region))
+
+
+p = ggplot() +
+  geom_rect(data = em, aes(xmin = cums, xmax = cume, ymin = -1.2*y, ymax = 1.2*y, fill = ifelse(chrnum %% 2 == 1, "odd", "even"))) +
+  scale_fill_manual(values = c("odd" = "gray90", even = "white"), guide = guide_none()) + new_scale_fill() +
+  scale_color_gradientn(name = "Δβ", limits = c(-1,1), colors = c("lightcyan", "cyan", "darkturquoise", "dodgerblue2", "blue", "black", "brown", "red", "orange", "gold", "khaki1")) +
+  scale_size_continuous(name = expression("N"^"O"*" probes")) +
+  geom_point(data = dt, mapping = aes(x = x, y = sign(dB) * (-log10(p)), color = dB, size = probes_in_region), alpha = 0.5) +
+  scale_y_continuous(expand = c(0,0), name = expression("signed -log"["10"]*" p-value")) +
+  scale_x_continuous(expand = c(0,0), breaks = setNames(chrlen$mid, chrlen$chr)) + 
+  facet_grid(comp~., scales = "free_y") +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), axis.ticks.x = element_blank(), panel.spacing = unit(0.1, "lines"))
+  
+
+ndir("fig1_res")
+ggsave(p, filename = "fig1e_mht.png", width = 210, height = 100, units = "mm", dpi = 400, scale = 1.8)
+```
+
+```{r}
+el = setNames(c("Chordoma I\nChordoma C", "Chordoma I\nnucleus pulposus", "Chordoma C\nnucleus pulposus", "Chordoma\nnucleus pulposus"), c("CI_CC", "CI_NP", "CC_NP", "Ch_NP"))
+
+em = do.call(rbind, lapply(unique(dmrs$comp), function(el){
+  chrlen %>% mutate(comp = el)
+}))  %>% mutate(chrnum = as.numeric(gsub("chr", "", chr)))
+
+em = left_join(em, dmrs %>% group_by(comp) %>% summarise(y = -log10(min(p))), by = "comp") %>% mutate(comp = factor(el[comp], levels = el))
+
+dt = dmrs %>%
+  filter(sig & ! (chr %in% c("chrY", "chrX"))) %>%
+  mutate(x = chrlen$cums[match(chr, chrlen$chr)] + ((start + end)/2)/10e9,
+         comp = factor(el[comp], levels = el),
+         probes_in_region = as.numeric(probes_in_region),
+         DMR = sprintf("<b>%s</b>\ndB: <b>%s</b>\np-value: <b>%s</b>\nFDR: <b>%s</b>\nSidak p: <b>%s</b>\nprobes: <b>%s</b>\ngenes: <b>%s</b>\nisland: <b>%s</b>", dmr, signif(dB, 2), signif(p, 2),signif(fdr, 2), signif(sidak, 2), nprobe, gene, relation_to_island))
+
+
+p = ggplot() +
+  geom_segment(data = em, aes(x = cume, xend = cume, y = -1.2*y, yend = 1.2*y)) +
+  #geom_rect(data = em, aes(xmin = cums, xmax = cume, ymin = -1.2*y, ymax = 1.2*y, fill = ifelse(chrnum %% 2 == 1, "odd", "even"))) +
+  #scale_fill_manual(values = c("odd" = "gray90", even = "white"), guide = guide_none()) + new_scale_fill() +
+  geom_point(data = dt, mapping = aes(x = x, y = sign(dB) * (-log10(p)), color = dB, size = probes_in_region, label = DMR), alpha = 0.5) +
+  scale_color_gradientn(name = "Δβ", limits = c(-1,1), colors = c("lightcyan", "cyan", "darkturquoise", "dodgerblue2", "blue", "black", "brown", "red", "orange", "gold", "khaki1")) +
+  scale_size_continuous(name = "N<sup>O</sup> probes") +
+  scale_y_continuous(expand = c(0,0), name = "signed -log<sub>10</sub> p-value") +
+  scale_x_continuous(expand = c(0,0), breaks = setNames(chrlen$mid, chrlen$chr)) + 
+  facet_grid(comp~., scales = "free_y") +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), axis.ticks.x = element_blank(), panel.spacing = unit(0.1, "lines"))
+
+library(plotly)
+ndir("fig1_res")
+htmlwidgets::saveWidget(ggplotly(p, tooltip = "label"), "supfile1.html")
+```
+
+
+
+
+
+
+```{r}
+goi = list(CI_CC = c("TERT" = "TERT",
+                     "TNXB" = "TNXB",
+                     "LSP1" = "LSP1; MIR4298",
+                     #"CDH4" = "CDH4",
+                     #"CDH11" = "CDH11",
+                     #"BLM" = "BLM",
+                     "TBC1D16" = "TBC1D16",
+                     "FGF1" = "FGF1",
+                     "OPCML" = "OPCML",
+                     "PRDM16" = "PRDM16",
+                     "NOTCH2" = "NOTCH2",
+                     "NOTCH4" = "NOTCH4",
+                     "NFASC" = "NFASC",
+                     "REGA3" = "REGA3",
+                     "WNT5A" = "WNT5A",
+                     "HLA-D" = "HLA-DRA",
+                     "FGF3" = "FGF3",
+                     "CACNA1H" = "CACNA1H",
+                     "PTPRCAP,CORO1B" = "PTPRCAP; CORO1B",
+                     "RTL1,MIR431..." = "MIR431; MIR433; MIR127; MIR432; MIR136; RTL1",
+                     "KRT15,19;JUN" = "KRT15; KRT19; JUP",
+                     "MIR376C..." = "MIR376C; MIR376A2; MIR654; MIR376B; MIR376A1; MIR300; MIR1185-1; MIR1185-2; MIR381; MIR487B; MIR539; MIR889; MIR655; MIR487A; MIR382",
+                     "MIR519B..." = "MIR519B; MIR525; MIR523; MIR518F; MIR520B; MIR518B; MIR526A1",
+                     "MIR379..." = "MIR379; MIR411; MIR299; MIR380; MIR1197; MIR323A; MIR758; MIR329-1; MIR329-2; MIR494; MIR1193; MIR543"),
+           CI_NP = c("HOXD3" = "HOXD3",
+                     "TNXB" = "TNXB",
+                     "EGFR" = "EGFR",
+                     "TBC1D16" = "TBC1D16",
+                     "LSP1" = "LSP1",
+                     "TBXT" = "TBXT",
+                     "FENDRR" = "FENDRR",
+                     "RIPK4" = "RIPK4",
+                     "HOXD3,HAGLR" = "HOXD3; HAGLR",
+                     "HOXD10" = "HOXD10",
+                     "MIR10B,HOXD4" = "MIR10B; HOXD4",
+                     "FGF1" = "FGF1",
+                      "KRT15,19;JUN" = "KRT15; KRT19; JUP",
+                      "MORN1" = "MORN1",
+                      "VGLL4" = "VGLL4",
+                      "FGF1" = "FGF1",
+                     "MNX1" = "MNX1-AS1; MNX1",
+                      #"ARID5B" = "ARID5B",
+                      "HDAC4" = "HDAC4",
+                      #"BCL6" = "BCL6",
+                      #"CLDN9" = "CLDN9",
+                      #"HOXD9" = "HOXD9",
+                      "HOXD11" = "HOXD11",
+                     "NFIX" = "NFIX",
+                     "MIRLET7BHG" = "MIRLET7BHG",
+                      "HOXA11" = "HOXA11; HOXA11-AS",
+                     "HOXA9-10" = "HOXA10-AS; HOXA9; MIR196B; HOXA10-HOXA9; HOXA10",
+                      #"DLC1" = "DLC1",
+                      #"FGF2" = "FGF2",
+                      #"FGFR1" = "FGFR1",
+                      #"BLM" = "BLM",
+                      #"AGO2,EIF2C2" = "AGO2; EIF2C2",
+                      #"MAP2K2" = "MAP2K2",
+                      #"MAP2K3" = "MAP2K3",
+                      "OPCML" = "OPCML",
+                      #"HIF1A" = "HIF1A",
+                      #"KDM4B" = "KDM4B",
+                      #"GLI2" = "GLI2",
+                      #"YWHAQ" = "YWHAQ",
+                      #"PTCH1" = "PTCH1",
+                      #"NF2" = "NF2",
+                      #"DICER1" = "DICER1",
+                      #"MSI2" = "MSI2",
+                      #"TP63" = "TP63",
+                      #"MTOR" = "MTOR"
+                     "MGMT" = "MGMT"),
+           CC_NP = c("HOXD3" = "HOXD3",
+                     "TBC1D16" = "TBC1D16",
+                     "EGFR" = "EGFR",
+                     "RIPK4" = "RIPK4",
+                     "LSP1" = "LSP1",
+                     "TNXB" = "TNXB",
+                     "TBXT" = "TBXT",
+                     "FENDRR" = "FENDRR",
+                     "HOXD3,HAGLR" = "HOXD3; HAGLR",
+                     "HOXD10" = "HOXD10",
+                     "MIR10B,HOXD4" = "MIR10B; HOXD4",
+                     "FGF1" = "FGF1",
+                      "KRT15,19;JUN" = "KRT15; KRT19; JUP",
+                      "MORN1" = "MORN1",
+                      "VGLL4" = "VGLL4",
+                      "FGF1" = "FGF1",
+                     "NFIX" = "NFIX",
+                     "MIRLET7BHG" = "MIRLET7BHG",
+                     "MNX1" = "MNX1-AS1; MNX1",
+                      #"ARID5B" = "ARID5B",
+                      "HDAC4" = "HDAC4",
+                      #"BCL6" = "BCL6",
+                      #"CLDN9" = "CLDN9",
+                      #"HOXD9" = "HOXD9",
+                      "HOXD11" = "HOXD11",
+                     "HOXA11" = "HOXA11; HOXA11-AS",
+                     "HOXA9-10" = "HOXA10-AS; HOXA9; MIR196B; HOXA10-HOXA9",
+                      #"DLC1" = "DLC1",
+                      #"FGF2" = "FGF2",
+                      #"FGFR1" = "FGFR1",
+                      #"BLM" = "BLM",
+                      #"AGO2,EIF2C2" = "AGO2; EIF2C2",
+                      #"MAP2K2" = "MAP2K2",
+                      #"MAP2K3" = "MAP2K3",
+                      "OPCML" = "OPCML",
+                      #"HIF1A" = "HIF1A",
+                      #"KDM4B" = "KDM4B",
+                      #"GLI2" = "GLI2",
+                      #"YWHAQ" = "YWHAQ",
+                      #"PTCH1" = "PTCH1",
+                      #"NF2" = "NF2",
+                      #"DICER1" = "DICER1",
+                      #"MSI2" = "MSI2",
+                      #"TP63" = "TP63",
+                      #"MTOR" = "MTOR"
+                     "MGMT" = "MGMT")
+)
+
+goi = lapply(goi, function(el){setNames(names(el), el)})
+       
+'dmrs = dmrs %>% mutate(lab = ifelse(comp == "CI_CC", names(el)[match(gene, el)], NA)) %>% arrange(p)
+dmrs$lab[duplicated(dmrs$lab)] = NA'
+
+goi
+
+```
+
+
+
+
+
+
+```{r}
+el = setNames(c("Chordoma I\nChordoma C", "Chordoma I\nnucleus pulposus", "Chordoma C\nnucleus pulposus"), c("CI_CC", "CI_NP", "CC_NP"))
+lvls = c("CI_CC", "CI_NP", "CC_NP")
+
+names(el)
+
+em = do.call(rbind, lapply(intersect(unique(dmrs$comp), names(el)), function(en){
+  chrlen %>% mutate(comp = en)
+}))  %>% mutate(chrnum = as.numeric(gsub("chr", "", chr)))
+
+em = left_join(em, dmrs %>% group_by(comp) %>% summarise(y = -log10(min(p))), by = "comp") %>% mutate(comp = factor(el[comp], levels = el))
+
+dt = dmrs %>% filter(sig & comp %in% names(el) & ! (chr %in% c("chrY", "chrX"))) %>% mutate(x = chrlen$cums[match(chr, chrlen$chr)] + ((start + end)/2)/10e9, comp = factor(el[comp], levels = el), probes_in_region = as.numeric(probes_in_region))
+
+p = ggplot() +
+  geom_rect(data = em, aes(xmin = cums, xmax = cume, ymin = -1.2*y, ymax = 1.2*y, fill = ifelse(chrnum %% 2 == 1, "odd", "even"))) +
+  scale_fill_manual(values = c("odd" = "gray90", even = "white"), guide = guide_none()) + new_scale_fill() +
+  scale_color_gradientn(name = "Δβ", limits = c(-1,1), colors = c("lightcyan", "cyan", "darkturquoise", "dodgerblue2", "blue", "black", "brown", "red", "orange", "gold", "khaki1")) +
+  scale_size_continuous(name = expression("N"^"O"*" probes")) +
+  geom_point(data = dt, mapping = aes(x = x, y = sign(dB) * (-log10(p)), color = dB, size = probes_in_region), alpha = 0.5)
+
+for(en in lvls){
+  eo = el[en]
+  df = dt %>% filter(comp == eo & gene %in% names(goi[[en]])) %>% arrange(p) %>% distinct(gene, .keep_all = T) %>% mutate(lab = goi[[en]][gene])
+  if(length(df$chr) > 0){
+    p = p + geom_text_repel(data = df, aes(x = x, y = sign(dB) * (-log10(p)), label = lab), size = 3, nudge_y = sign(df$dB) * pmin(max(-log10(df$p)) + log10(df$p), 20), direction = "x", min.segment.length = 0)
+  }
+}
+  #geom_text_repel(data = dt, aes(x = x, y = sign(dB) * (-log10(p)), label = lab), direction = "x", nudge_y = 30) +
+  p = p +
+  scale_y_continuous(expand = c(0,0), name = expression("signed -log"["10"]*" p-value")) +
+  scale_x_continuous(expand = c(0,0), breaks = setNames(chrlen$mid, chrlen$chr)) + 
+  facet_grid(comp~., scales = "free_y") +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title.x = element_blank(), axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), axis.ticks.x = element_blank(), panel.spacing = unit(0.1, "lines"))
+  
+ndir("fig1_res")
+ggsave(p, filename = "fig1e.png", width = 210, height = 82, units = "mm", dpi = 400, scale = 1.8)
+ggsave(p, filename = "fig1e.pdf", width = 210, height = 87, units = "mm", dpi = 400, scale = 1.8)
+mcsaveRDS(p, "fig1e.rds")
+```
+```{r}
+ndir("fig1_res")
+list.files()
+```
+
+```{r}
+y = setNames(1:4, c("Ch vs NP","CI vs CC", "CI vs NP", "CC vs NP" ))
+cols_cgi = c("Island" = "burlywood4", "Shore" = "khaki", "Shelf" = "paleturquoise", "OpenSea" = "navy")
+
+
+df = dmp %>% dplyr::select(probe, Relation_to_Island, Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) %>% pivot_longer(cols = colnames(dmp)[grepl("_gr", colnames(dmp))], values_to = "sig", names_to = "comp") %>% filter(!sig == "ns") %>% 
+  mutate(relation = factor(gsub("N_", "", gsub("S_", "", Relation_to_Island)), levels = c("Island", "Shore", "Shelf", "OpenSea")),
+         comparison = factor(paste0(gsub("_", " vs ", gsub("_gr", "", comp)), " ", sig), levels = c("CI vs CC hyper", "CI vs CC hypo", "Ch vs NP hyper", "Ch vs NP hypo", "CI vs NP hyper", "CI vs NP hypo", "CC vs NP hyper", "CC vs NP hypo"))) %>% mutate(one = 1) %>% group_by(comparison, relation) %>% summarise(sig = unique(sig), n = sum(one)) %>% mutate(y = y[gsub(" hyper", "", gsub(" hypo", "", comparison))])
+
+
+p = ggplot() +
+  geom_bar(data = df %>% filter(sig == "hyper"), aes(x = -y, y = n, fill = relation), stat = "identity") +
+  geom_bar(data = df %>% filter(sig == "hypo"), aes(x = -y, y = -n, fill = relation), stat = "identity") +
+  geom_hline(yintercept = 0, color = "black") + 
+  scale_fill_manual(name = "CpG\nrelation", values = cols_cgi, breaks = names(cols_cgi)) +
+  scale_x_continuous(labels = gsub(" vs ", "\n", names(y)), breaks = -unname(y), name = "Group") +
+  scale_y_continuous(expand = c(0.2,0.2), name = expression("N"^"o"*" DMPs")) +
+  theme_bw() +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.title.y = element_blank()) +
+  coord_flip() +
+  labs(title = "DMPs in relation to CGIs")
+
+for(cm in names(y)){
+  dr = "hyper"
+  x = sum((df %>% filter(comparison %in% paste(cm, dr)))$n)
+  myp = df %>% filter(comparison %in% paste(cm, dr)) %>% 
+    ggplot() +
+    geom_bar(aes(y = n, x = 1, fill = relation), stat = "identity") +
+    coord_polar("y") +
+    scale_fill_manual(values = cols_cgi) +
+    theme_void() + theme(legend.position = "none")
+  p = p + annotation_custom(ggplotGrob(myp), ymin = x + 0.001*sum(df$n), ymax = x + 0.1*sum(df$n), xmin = -y[cm] - 0.3, xmax = -y[cm] + 0.3)
+  
+  dr = "hypo"
+  x = sum((df %>% filter(comparison %in% paste(cm, dr)))$n)
+  myp = df %>% filter(comparison %in% paste(cm, dr)) %>% 
+    ggplot() +
+    geom_bar(aes(y = n, x = 1, fill = relation), stat = "identity") +
+    coord_polar("y") +
+    scale_fill_manual(values = cols_cgi) +
+    theme_void() + theme(legend.position = "none")
+  p = p + annotation_custom(ggplotGrob(myp), ymax = -(x + 0.001*sum(df$n)), ymin = -(x + 0.1*sum(df$n)), xmin = -y[cm] - 0.3, xmax = -y[cm] + 0.3)
+}
+
+p_d1 = p
+
+
+ndir("fig1_res")
+ggsave(p_d1, filename = "fig1d1.png", width = 63.5, height = 5*120/12, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+```{r}
+df = dmp %>% dplyr::select(Relation_to_Gene, Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) %>% pivot_longer(cols = colnames(dmp)[grepl("_gr", colnames(dmp))], values_to = "sig", names_to = "comp") %>% filter(!(sig == "ns" | Relation_to_Gene == "ExonBnd")) %>%
+  mutate(relation = factor(gsub("Intergenic", "Inter.", Relation_to_Gene), levels = c("TSS200", "TSS1500", "5'UTR", "1stExon", "Body", "3'UTR", "Inter.")),
+         comparison = factor(paste0(gsub("_", " vs ", gsub("_gr", "", comp)), " ", sig), levels = c("CI vs CC hyper", "CI vs CC hypo", "Ch vs NP hyper", "Ch vs NP hypo", "CI vs NP hyper", "CI vs NP hypo", "CC vs NP hyper", "CC vs NP hypo"))) %>% mutate(one = 1) %>% group_by(comparison, relation) %>% summarise(sig = unique(sig), n = sum(one)) %>% mutate(y = y[gsub(" hyper", "", gsub(" hypo", "", comparison))])
+
+cols_gene = setNames(c("gray", rev(brewer.pal(n = 6, name = "Set1"))), rev(levels(df$relation)))
+
+p = ggplot() +
+  geom_bar(data = df %>% filter(sig == "hyper"), aes(x = -y, y = n, fill = relation), stat = "identity") +
+  geom_bar(data = df %>% filter(sig == "hypo"), aes(x = -y, y = -n, fill = relation), stat = "identity") +
+  geom_hline(yintercept = 0, color = "black") + 
+  scale_fill_manual(name = "Gene\nrelation", values = cols_gene, breaks = rev(names(cols_gene))) +
+  scale_x_continuous(labels = gsub(" vs ", "\n", names(y)), breaks = -unname(y), name = "Group") +
+  scale_y_continuous(expand = c(0.2,0.2), name = expression("N"^"o"*" DMPs")) +
+  theme_bw() +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(), axis.title.y = element_blank()) +
+  coord_flip() +
+  labs(title = "DMPs in relation to genes")
+
+for(cm in names(y)){
+  dr = "hyper"
+  x = sum((df %>% filter(comparison %in% paste(cm, dr)))$n)
+  myp = df %>% filter(comparison %in% paste(cm, dr)) %>% 
+    ggplot() +
+    geom_bar(aes(y = n, x = 1, fill = relation), stat = "identity") +
+    coord_polar("y") +
+    scale_fill_manual(values = cols_gene) +
+    theme_void() + theme(legend.position = "none")
+  p = p + annotation_custom(ggplotGrob(myp), ymin = x + 0.001*sum(df$n), ymax = x + 0.1*sum(df$n), xmin = -y[cm] - 0.3, xmax = -y[cm] + 0.3)
+  
+  dr = "hypo"
+  x = sum((df %>% filter(comparison %in% paste(cm, dr)))$n)
+  myp = df %>% filter(comparison %in% paste(cm, dr)) %>% 
+    ggplot() +
+    geom_bar(aes(y = n, x = 1, fill = relation), stat = "identity") +
+    coord_polar("y") +
+    scale_fill_manual(values = cols_gene) +
+    theme_void() + theme(legend.position = "none")
+  p = p + annotation_custom(ggplotGrob(myp), ymax = -(x + 0.001*sum(df$n)), ymin = -(x + 0.1*sum(df$n)), xmin = -y[cm] - 0.3, xmax = -y[cm] + 0.3)
+}
+
+p_d2 = p
+
+
+ndir("fig1_res")
+ggsave(p_d2, filename = "fig1d2.png", width = 63.5, height = 7*120/12, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+```{r}
+#old
+'
+cols_gene = setNames(c("gray", rev(brewer.pal(n = 6, name = "Set1"))), levels(df$relation))
+
+df = dmp %>% select(probe, Relation_to_Island, Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) %>% pivot_longer(cols = colnames(dmp)[grepl("_gr", colnames(dmp))], values_to = "sig", names_to = "comp") %>% filter(!sig == "ns") %>%
+  mutate(relation = factor(gsub("N_", "", gsub("S_", "", Relation_to_Island)), levels = rev(c("Island", "Shore", "Shelf", "OpenSea"))),
+         comparison = factor(paste0(gsub("_", " vs ", gsub("_gr", "", comp)), " ", sig), levels = c("CI vs CC hyper", "CI vs CC hypo", "Ch vs NP hyper", "Ch vs NP hypo", "CI vs NP hyper", "CI vs NP hypo", "CC vs NP hyper", "CC vs NP hypo"))
+         )
+
+df = dmp %>% select(probe, Relation_to_Island, Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) %>% pivot_longer(cols = colnames(dmp)[grepl("_gr", colnames(dmp))], values_to = "sig", names_to = "comp") %>% filter(!sig == "ns") %>%
+  mutate(relation = factor(gsub("N_", "", gsub("S_", "", Relation_to_Island)), levels = rev(c("Island", "Shore", "Shelf", "OpenSea"))),
+         comparison = factor(paste0(gsub("_", " vs ", gsub("_gr", "", comp)), " ", sig), levels = c("CI vs CC hyper", "CI vs CC hypo", "Ch vs NP hyper", "Ch vs NP hypo", "CI vs NP hyper", "CI vs NP hypo", "CC vs NP hyper", "CC vs NP hypo"))
+         )
+                                                                                                                                                                                                                            
+cols_cgi = c("Island" = "burlywood4", "Shore" = "khaki", "Shelf" = "paleturquoise", "OpenSea" = "blue4")
+
+x = 1 - cumsum(table(gsub("N_", "", gsub("S_", "",dmp$Relation_to_Island)))[rev(levels(df$relation))]) / dim(dmp)[1]
+x = x[-length(x)]
+
+fig1d1 = ggplot(data = df) +
+  geom_mosaic(aes(x = product(relation, comparison), fill = relation), offset = 0.007, alpha = 1) +
+  scale_x_productlist(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))  +
+  scale_fill_manual(name = "CpG\nrelation", values = cols_cgi, breaks = names(cols_cgi)) +
+  theme_bw() + theme(panel.grid = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "bottom") + geom_segment(aes(x = (round(0.3*dim(df)[1]))/((1 + 5*0.007)*dim(df)[1]), xend = (round(0.3*dim(df)[1]) + 1000)/((1 + 5*0.007)*dim(df)[1]), y = 0.1, yend = 0.1), color = "red", size = 1.25) + geom_text(aes(x = (round(0.3*dim(df)[1]) + 500)/((1 + 5*0.007)*dim(df)[1]), y = 0.05, label = "1000 DMPs"), color = "red") + labs(y = "Fraction")
+
+
+
+
+df = dmp %>% select(probe, Relation_to_Gene, Ch_NP_gr, CI_CC_gr, CI_NP_gr, CC_NP_gr) %>% pivot_longer(cols = colnames(dmp)[grepl("_gr", colnames(dmp))], values_to = "sig", names_to = "comp") %>% filter(!(sig == "ns" | Relation_to_Gene == "ExonBnd")) %>%
+  mutate(relation = factor(gsub("Intergenic", "Inter.", Relation_to_Gene), levels = rev(c("TSS200", "TSS1500", "5\'UTR", "1stExon", "Body", "3\'UTR", "Inter."))),
+         comparison = factor(paste0(gsub("_", " vs ", gsub("_gr", "", comp)), " ", sig), levels = c("CI vs CC hyper", "CI vs CC hypo", "Ch vs NP hyper", "Ch vs NP hypo", "CI vs NP hyper", "CI vs NP hypo", "CC vs NP hyper", "CC vs NP hypo")))
+                                                                                                                          
+cols_gene = setNames(c("gray", rev(brewer.pal(n = 6, name = "Set1"))), levels(df$relation))
+cols_gene
+
+fig1d2 = ggplot(data = df) +
+  geom_mosaic(aes(x = product(relation, comparison), fill = relation), offset = 0.007, alpha = 1) +
+  scale_x_productlist(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0))  +
+  scale_fill_manual(name = "Gene\nrelation", values = cols_gene, breaks = rev(names(cols_gene))) +
+  theme_bw() + theme(panel.grid = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "bottom") + geom_segment(aes(x = (round(0.3*dim(df)[1]))/((1 + 5*0.007)*dim(df)[1]), xend = (round(0.3*dim(df)[1]) + 1000)/((1 + 5*0.007)*dim(df)[1]), y = 0.1, yend = 0.1), color = "red", size = 1.25) + geom_text(aes(x = (round(0.3*dim(df)[1]) + 500)/((1 + 5*0.007)*dim(df)[1]), y = 0.05, label = "1000 DMPs"), color = "red") + labs(y = "Fraction")
+
+
+
+fig1d2
+
+fig1d = ggarrange(fig1d1, fig1d2,
+          nrow = 2, ncol = 1, heights = c(1, 1), align = "hv") + theme(plot.background = element_rect(fill = "white"))
+
+ndir("fig1_res")
+ggsave(fig1d, filename = "fig1d.png", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+ggsave(fig1d, filename = "fig1d.pdf", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+mcsaveRDS(fig1d, "fig1d.rds")
+'
+```
+
+```{r}
+fig1d = ggarrange(p_d1, p_d2,
+          nrow = 2, ncol = 1, heights = c(5, 5.2)) + theme(plot.background = element_rect(fill = "white", color = "white"))
+
+
+ndir("fig1_res")
+ggsave(fig1d, filename = "fig1d.png", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+ggsave(fig1d, filename = "fig1d.pdf", width = 63.5, height = 120, units = "mm", dpi = 400, scale = 1.8)
+mcsaveRDS(fig1d, "fig1d.rds")
+```
+
+
+
+```{r}
+library(png)
+ndir("fig1_res")
+fig1a = mcreadRDS("fig1a.rds")
+fig1b = mcreadRDS("fig1b.rds")
+fig1c = mcreadRDS("fig1c.rds")
+fig1d = mcreadRDS("fig1d.rds")
+fig1e = mcreadRDS("fig1e.rds")
+```
+
+```{r}
+fig1e
+```
+
+```{r}
+ggsave(ggarrange(fig1a,
+                 ggarrange(fig1b, fig1c, fig1d, nrow = 1, ncol = 3, labels = c("b", "c", "d"), font.label = list(size = 12, face = "plain")),
+                 fig1e,
+                 labels = c("a", "", "e"), font.label = list(size = 12, face = "plain"), nrow = 3, ncol = 1, heights = c(6,12,7.4))+  theme(plot.background = element_rect(fill = "white")),
+       filename = "figure1.pdf", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+```
+
+
+
+```{r}
+library(scales)
+ggsave(ggarrange(fig1a,
+                 ggarrange(fig1b, fig1c, fig1d, nrow = 1, ncol = 3, labels = c("b", "c", "d"), font.label = list(size = 12, face = "plain")),
+                 fig1e,
+                 labels = c("a", "", "e"), font.label = list(size = 12, face = "plain"), nrow = 3, ncol = 1, heights = c(6,12,7.4))+  theme(plot.background = element_rect(fill = "white")),
+       filename = "figure1.png", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+
+ggsave(ggarrange(fig1a,
+                 ggarrange(fig1b, fig1c, fig1d, nrow = 1, ncol = 3, labels = c("b", "c", "d"), font.label = list(size = 12, face = "plain")),
+                 fig1e,
+                 labels = c("a", "", "e"), font.label = list(size = 12, face = "plain"), nrow = 3, ncol = 1, heights = c(6,12,7.4))+  theme(plot.background = element_rect(fill = "white")),
+       filename = "figure1.tiff", width = 210, height = 297, units = "mm", dpi = 400, scale = 1.8)
+```
+
+```{r}
+p_1b1
+p_1b2
+```
+
+```{r}
+el = setNames(c("Chordoma I\nChordoma C", "Chordoma I\nnucleus pulposus", "Chordoma C\nnucleus pulposus", "Chordoma\nnucleus pulposus"), c("CI_CC", "CI_NP", "CC_NP", "Ch_NP"))
+
+
+```
+
+
+
+
+```{r}
+
+
+supfile1 = ggplot(data = dmrs %>%
+                 filter(sig & ! (chr == "chrX")) %>%
+                 mutate(probes_in_region = as.numeric(probes_in_region),
+                        chr = factor(chr, levels = paste0("chr", 1:22)),
+                        DMR = sprintf("%s\ndB: %s\nFDR: %s\nSidak p: %s\nprobes: %s\ngenes: %s\nisland: %s", dmr, signif(dB, 2), signif(fdr, 2), signif(sidak, 2), nprobe, gene, relation_to_island),
+                        comp = factor(comp, levels = names(el)))) +
+  geom_point(mapping = aes(x = (start + end)/2, y = sign(dB) * (-log10(p)), size = probes_in_region, color = dB, label = DMR), alpha = 0.5) +
+  scale_size_continuous(name = expression("N<sup>O</sup> probes")) +
+  scale_y_continuous(limits = c(-1.1, 1.1) * max(abs(log10(dmrs$p))), name = "signed -log10 p-value") +
+  scale_color_gradientn(name = "Δβ", limits = c(-1,1), colors = c("lightcyan", "cyan", "darkturquoise", "dodgerblue2", "blue", "black", "brown", "red", "orange", "gold", "khaki1")) +
+  theme_bw() + theme(panel.grid = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+  facet_grid(rows = vars(comp), cols = vars(chr), scales = "free_x", space = "free_x")
+
+supfile1
+```
+
+```{r}
+library(plotly)
+ndir("fig1_res")
+htmlwidgets::saveWidget(ggplotly(supfile1, tooltip = "label"), "supfile1.html")
+```
+
+```{r}
+ndir("fig1_res")
+save(fig1b, fig1c, fig1d, fig1e, file = "fig1.Rdata")
+```
+
+
